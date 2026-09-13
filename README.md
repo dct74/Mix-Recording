@@ -47,10 +47,26 @@ cd Mix-Recording
 # Only needed when xcode-select still points at the Command Line Tools
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
-xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording \
-  -configuration Release -derivedDataPath build build
+xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording -configuration Release build
 
-open build/Build/Products/Release/Mix-Recording.app
+# Xcode puts the product in the default derived data folder
+open ~/Library/Developer/Xcode/DerivedData/Mix-Recording-*/Build/Products/Release/Mix-Recording.app
+```
+
+Two things to know about signing:
+
+- The project signs ad-hoc ("Sign to Run Locally") and applies
+  `Mix-Recording/Mix-Recording.entitlements`. Do **not** pass `CODE_SIGNING_ALLOWED=NO`: that skips
+  signing the bundle entirely and macOS then reports the app as *"damaged"* instead of merely
+  unverified.
+- Keep the build products out of a synced folder. With `-derivedDataPath build` inside an
+  iCloud-synced `~/Documents`, the file provider stamps `com.apple.FinderInfo` /
+  `com.apple.fileprovider.*` onto the bundle and `codesign` fails with *"resource fork, Finder
+  information, or similar detritus not allowed"*.
+
+```bash
+# Debug build, for a quick local run
+xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording -configuration Debug build
 ```
 
 ### Publishing a release
@@ -58,11 +74,15 @@ open build/Build/Products/Release/Mix-Recording.app
 The Homebrew cask points at `Mix-Recording-<version>.zip` on the GitHub releases page:
 
 ```bash
-xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording \
-  -configuration Release -derivedDataPath build build
+# Bump MARKETING_VERSION in the project first, then:
+xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording -configuration Release build
 
-(cd build/Build/Products/Release && zip -qry /tmp/Mix-Recording-1.0.zip Mix-Recording.app)
-shasum -a 256 /tmp/Mix-Recording-1.0.zip     # put this hash into Casks/mix-recording.rb
+PRODUCT=~/Library/Developer/Xcode/DerivedData/Mix-Recording-*/Build/Products/Release/Mix-Recording.app
+codesign --verify --deep --strict $PRODUCT        # must print "valid on disk"
+
+# ditto keeps the bundle's symlinks and metadata; a plain zip can break the signature
+ditto -c -k --sequesterRsrc --keepParent $PRODUCT /tmp/Mix-Recording-<version>.zip
+shasum -a 256 /tmp/Mix-Recording-<version>.zip    # put this hash into Casks/mix-recording.rb
 ```
 
 Create a release tagged `v1.0` and upload `/tmp/Mix-Recording-1.0.zip`, then update `version` and
@@ -130,11 +150,23 @@ First run asks for permissions:
   press Record once with **System Audio Only** or **Combined Recording** selected: the app calls
   `CGRequestScreenCaptureAccess()` before showing its own instructions, which registers it there.
 
-**macOS refuses to open the app installed with Homebrew**
+**macOS says the app is "damaged", or refuses to open it**
 
-- The build is signed ad-hoc and not notarized, so Gatekeeper may block the first launch
-  ("Apple could not verify ..."). Right-click the app and choose *Open* once, or clear the quarantine
-  flag: `xattr -dr com.apple.quarantine /Applications/Mix-Recording.app`.
+- Releases are signed ad-hoc but not notarized, so Gatekeeper blocks the first launch of a downloaded
+  copy. Clear the download flag and it starts normally:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/Mix-Recording.app
+  ```
+
+  (Right-click → *Open* also works, and macOS 15+ additionally offers *Open Anyway* under
+  `System Settings → Privacy & Security`.)
+- *"Mix-Recording.app is damaged"* with **no** *Open Anyway* button means the bundle signature is
+  broken rather than merely untrusted. That happens when a build skipped signing
+  (`CODE_SIGNING_ALLOWED=NO`); check with `codesign --verify --deep --strict /Applications/Mix-Recording.app`
+  and rebuild without disabling signing.
+- To remove the prompt entirely the app has to be signed with a Developer ID certificate and
+  notarized, which requires a paid Apple Developer account.
 
 **"Could not start recording"**
 - Check microphone access under `System Settings → Privacy & Security → Microphone`
@@ -147,14 +179,13 @@ First run asks for permissions:
 ## Development
 
 ```bash
-# Debug build
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording \
-  -configuration Debug -derivedDataPath build build
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer   # if xcode-select points at the CLT
+
+xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording -configuration Debug build
 
 # Build the test bundles (Mix-RecordingTests / Mix-RecordingUITests)
-xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording \
-  -configuration Debug -derivedDataPath build build-for-testing
+xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording -configuration Debug \
+  build-for-testing
 ```
 
 The unit test target imports the app module as `@testable import Mix_Recording` (the product name is

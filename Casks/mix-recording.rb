@@ -1,6 +1,6 @@
 cask "mix-recording" do
-  version "1.0"
-  sha256 "a8a9e91875d5b7568b5716d7f3c04fd3d1a7596a85b5119d17d97ed172c584f8"
+  version "1.0.1"
+  sha256 "62e9254c0bb88082fc6ee0159db84d7fa25c5a170f995db2134402c1829bf776"
 
   url "https://github.com/dct74/Mix-Recording/releases/download/v#{version}/Mix-Recording-#{version}.zip"
   name "Mix-Recording"
