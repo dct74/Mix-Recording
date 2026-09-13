@@ -4,12 +4,6 @@
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>We need access to your microphone to record audio.</string>
-	<key>NSDesktopFolderUsageDescription</key>
-	<string>We need access to save your recordings.</string>
-	<key>NSDocumentsFolderUsageDescription</key>
-	<string>We need access to save your recordings.</string>
-	<key>NSDownloadsFolderUsageDescription</key>
-	<string>We need access to save your recordings.</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>We need screen recording permission to capture system audio.</string>
 </dict>

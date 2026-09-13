@@ -7,13 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		C6B776922DC12ACB005468BC /* CombinedAudioEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6B776912DC12ACB005468BC /* CombinedAudioEngine.swift */; };
+		D1A000032E00000100000003 /* AudioMixdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A000042E00000100000004 /* AudioMixdown.swift */; };
 		C6CBAE642D9AF19C0053C5AB /* AudioRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CBAE632D9AF19C0053C5AB /* AudioRecorder.swift */; };
-		C6CBAE692D9AFE560053C5AB /* MacAudioRecorderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CBAE682D9AFE560053C5AB /* MacAudioRecorderApp.swift */; };
-		C6CBAE6A2D9AFE560053C5AB /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CBAE672D9AFE560053C5AB /* AppDelegate.swift */; };
-		C6CBAE6E2D9B00870053C5AB /* Info.plist in Resources */ = {isa = PBXBuildFile; fileRef = C6CBAE6D2D9B00870053C5AB /* Info.plist */; };
-		C6CBAE6F2D9B00870053C5AB /* AudioRecorderApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CBAE6B2D9B00870053C5AB /* AudioRecorderApp.swift */; };
+		C6CBAE692D9AFE560053C5AB /* MixRecordingApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CBAE682D9AFE560053C5AB /* MixRecordingApp.swift */; };
 		C6CBAE702D9B00870053C5AB /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6CBAE6C2D9B00870053C5AB /* ContentView.swift */; };
+		D1A000012E00000100000001 /* AudioFileWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A000022E00000100000002 /* AudioFileWriter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -22,44 +20,43 @@
 			containerPortal = C6CBAE2D2D9AF08A0053C5AB /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = C6CBAE342D9AF08A0053C5AB;
-			remoteInfo = MacAudioRecorder;
+			remoteInfo = Mix-Recording;
 		};
 		C6CBAE512D9AF08C0053C5AB /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = C6CBAE2D2D9AF08A0053C5AB /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = C6CBAE342D9AF08A0053C5AB;
-			remoteInfo = MacAudioRecorder;
+			remoteInfo = Mix-Recording;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		C6B776912DC12ACB005468BC /* CombinedAudioEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CombinedAudioEngine.swift; sourceTree = "<group>"; };
-		C6CBAE352D9AF08A0053C5AB /* MacAudioRecorder.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MacAudioRecorder.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		C6CBAE462D9AF08C0053C5AB /* MacAudioRecorderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacAudioRecorderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		C6CBAE502D9AF08C0053C5AB /* MacAudioRecorderUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacAudioRecorderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1A000042E00000100000004 /* AudioMixdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioMixdown.swift; sourceTree = "<group>"; };
+		C6CBAE352D9AF08A0053C5AB /* Mix-Recording.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Mix-Recording.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C6CBAE462D9AF08C0053C5AB /* Mix-RecordingTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = Mix-RecordingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C6CBAE502D9AF08C0053C5AB /* Mix-RecordingUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = Mix-RecordingUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		C6CBAE632D9AF19C0053C5AB /* AudioRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorder.swift; sourceTree = "<group>"; };
-		C6CBAE672D9AFE560053C5AB /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		C6CBAE682D9AFE560053C5AB /* MacAudioRecorderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAudioRecorderApp.swift; sourceTree = "<group>"; };
-		C6CBAE6B2D9B00870053C5AB /* AudioRecorderApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioRecorderApp.swift; sourceTree = "<group>"; };
+		D1A000022E00000100000002 /* AudioFileWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioFileWriter.swift; sourceTree = "<group>"; };
+		C6CBAE682D9AFE560053C5AB /* MixRecordingApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixRecordingApp.swift; sourceTree = "<group>"; };
 		C6CBAE6C2D9B00870053C5AB /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		C6CBAE6D2D9B00870053C5AB /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		C6CBAE372D9AF08A0053C5AB /* MacAudioRecorder */ = {
+		C6CBAE372D9AF08A0053C5AB /* Mix-Recording */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MacAudioRecorder;
+			path = Mix-Recording;
 			sourceTree = "<group>";
 		};
-		C6CBAE492D9AF08C0053C5AB /* MacAudioRecorderTests */ = {
+		C6CBAE492D9AF08C0053C5AB /* Mix-RecordingTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MacAudioRecorderTests;
+			path = Mix-RecordingTests;
 			sourceTree = "<group>";
 		};
-		C6CBAE532D9AF08C0053C5AB /* MacAudioRecorderUITests */ = {
+		C6CBAE532D9AF08C0053C5AB /* Mix-RecordingUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = MacAudioRecorderUITests;
+			path = Mix-RecordingUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -92,16 +89,15 @@
 		C6CBAE2C2D9AF08A0053C5AB = {
 			isa = PBXGroup;
 			children = (
-				C6B776912DC12ACB005468BC /* CombinedAudioEngine.swift */,
-				C6CBAE6B2D9B00870053C5AB /* AudioRecorderApp.swift */,
+				D1A000042E00000100000004 /* AudioMixdown.swift */,
 				C6CBAE6C2D9B00870053C5AB /* ContentView.swift */,
 				C6CBAE6D2D9B00870053C5AB /* Info.plist */,
-				C6CBAE672D9AFE560053C5AB /* AppDelegate.swift */,
-				C6CBAE682D9AFE560053C5AB /* MacAudioRecorderApp.swift */,
+				C6CBAE682D9AFE560053C5AB /* MixRecordingApp.swift */,
 				C6CBAE632D9AF19C0053C5AB /* AudioRecorder.swift */,
-				C6CBAE372D9AF08A0053C5AB /* MacAudioRecorder */,
-				C6CBAE492D9AF08C0053C5AB /* MacAudioRecorderTests */,
-				C6CBAE532D9AF08C0053C5AB /* MacAudioRecorderUITests */,
+				D1A000022E00000100000002 /* AudioFileWriter.swift */,
+				C6CBAE372D9AF08A0053C5AB /* Mix-Recording */,
+				C6CBAE492D9AF08C0053C5AB /* Mix-RecordingTests */,
+				C6CBAE532D9AF08C0053C5AB /* Mix-RecordingUITests */,
 				C6CBAE362D9AF08A0053C5AB /* Products */,
 			);
 			sourceTree = "<group>";
@@ -109,9 +105,9 @@
 		C6CBAE362D9AF08A0053C5AB /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				C6CBAE352D9AF08A0053C5AB /* MacAudioRecorder.app */,
-				C6CBAE462D9AF08C0053C5AB /* MacAudioRecorderTests.xctest */,
-				C6CBAE502D9AF08C0053C5AB /* MacAudioRecorderUITests.xctest */,
+				C6CBAE352D9AF08A0053C5AB /* Mix-Recording.app */,
+				C6CBAE462D9AF08C0053C5AB /* Mix-RecordingTests.xctest */,
+				C6CBAE502D9AF08C0053C5AB /* Mix-RecordingUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -119,9 +115,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		C6CBAE342D9AF08A0053C5AB /* MacAudioRecorder */ = {
+		C6CBAE342D9AF08A0053C5AB /* Mix-Recording */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C6CBAE5A2D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "MacAudioRecorder" */;
+			buildConfigurationList = C6CBAE5A2D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "Mix-Recording" */;
 			buildPhases = (
 				C6CBAE312D9AF08A0053C5AB /* Sources */,
 				C6CBAE322D9AF08A0053C5AB /* Frameworks */,
@@ -132,18 +128,18 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				C6CBAE372D9AF08A0053C5AB /* MacAudioRecorder */,
+				C6CBAE372D9AF08A0053C5AB /* Mix-Recording */,
 			);
-			name = MacAudioRecorder;
+			name = Mix-Recording;
 			packageProductDependencies = (
 			);
-			productName = MacAudioRecorder;
-			productReference = C6CBAE352D9AF08A0053C5AB /* MacAudioRecorder.app */;
+			productName = Mix-Recording;
+			productReference = C6CBAE352D9AF08A0053C5AB /* Mix-Recording.app */;
 			productType = "com.apple.product-type.application";
 		};
-		C6CBAE452D9AF08C0053C5AB /* MacAudioRecorderTests */ = {
+		C6CBAE452D9AF08C0053C5AB /* Mix-RecordingTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C6CBAE5D2D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "MacAudioRecorderTests" */;
+			buildConfigurationList = C6CBAE5D2D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "Mix-RecordingTests" */;
 			buildPhases = (
 				C6CBAE422D9AF08C0053C5AB /* Sources */,
 				C6CBAE432D9AF08C0053C5AB /* Frameworks */,
@@ -155,18 +151,18 @@
 				C6CBAE482D9AF08C0053C5AB /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				C6CBAE492D9AF08C0053C5AB /* MacAudioRecorderTests */,
+				C6CBAE492D9AF08C0053C5AB /* Mix-RecordingTests */,
 			);
-			name = MacAudioRecorderTests;
+			name = Mix-RecordingTests;
 			packageProductDependencies = (
 			);
-			productName = MacAudioRecorderTests;
-			productReference = C6CBAE462D9AF08C0053C5AB /* MacAudioRecorderTests.xctest */;
+			productName = Mix-RecordingTests;
+			productReference = C6CBAE462D9AF08C0053C5AB /* Mix-RecordingTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
-		C6CBAE4F2D9AF08C0053C5AB /* MacAudioRecorderUITests */ = {
+		C6CBAE4F2D9AF08C0053C5AB /* Mix-RecordingUITests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C6CBAE602D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "MacAudioRecorderUITests" */;
+			buildConfigurationList = C6CBAE602D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "Mix-RecordingUITests" */;
 			buildPhases = (
 				C6CBAE4C2D9AF08C0053C5AB /* Sources */,
 				C6CBAE4D2D9AF08C0053C5AB /* Frameworks */,
@@ -178,13 +174,13 @@
 				C6CBAE522D9AF08C0053C5AB /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				C6CBAE532D9AF08C0053C5AB /* MacAudioRecorderUITests */,
+				C6CBAE532D9AF08C0053C5AB /* Mix-RecordingUITests */,
 			);
-			name = MacAudioRecorderUITests;
+			name = Mix-RecordingUITests;
 			packageProductDependencies = (
 			);
-			productName = MacAudioRecorderUITests;
-			productReference = C6CBAE502D9AF08C0053C5AB /* MacAudioRecorderUITests.xctest */;
+			productName = Mix-RecordingUITests;
+			productReference = C6CBAE502D9AF08C0053C5AB /* Mix-RecordingUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
@@ -210,7 +206,7 @@
 					};
 				};
 			};
-			buildConfigurationList = C6CBAE302D9AF08A0053C5AB /* Build configuration list for PBXProject "MacAudioRecorder" */;
+			buildConfigurationList = C6CBAE302D9AF08A0053C5AB /* Build configuration list for PBXProject "Mix-Recording" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -224,9 +220,9 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				C6CBAE342D9AF08A0053C5AB /* MacAudioRecorder */,
-				C6CBAE452D9AF08C0053C5AB /* MacAudioRecorderTests */,
-				C6CBAE4F2D9AF08C0053C5AB /* MacAudioRecorderUITests */,
+				C6CBAE342D9AF08A0053C5AB /* Mix-Recording */,
+				C6CBAE452D9AF08C0053C5AB /* Mix-RecordingTests */,
+				C6CBAE4F2D9AF08C0053C5AB /* Mix-RecordingUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -236,7 +232,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C6CBAE6E2D9B00870053C5AB /* Info.plist in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -262,11 +257,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				C6CBAE642D9AF19C0053C5AB /* AudioRecorder.swift in Sources */,
-				C6B776922DC12ACB005468BC /* CombinedAudioEngine.swift in Sources */,
-				C6CBAE692D9AFE560053C5AB /* MacAudioRecorderApp.swift in Sources */,
-				C6CBAE6A2D9AFE560053C5AB /* AppDelegate.swift in Sources */,
-				C6CBAE6F2D9B00870053C5AB /* AudioRecorderApp.swift in Sources */,
+				D1A000032E00000100000003 /* AudioMixdown.swift in Sources */,
+				C6CBAE692D9AFE560053C5AB /* MixRecordingApp.swift in Sources */,
 				C6CBAE702D9B00870053C5AB /* ContentView.swift in Sources */,
+				D1A000012E00000100000001 /* AudioFileWriter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -289,12 +283,12 @@
 /* Begin PBXTargetDependency section */
 		C6CBAE482D9AF08C0053C5AB /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = C6CBAE342D9AF08A0053C5AB /* MacAudioRecorder */;
+			target = C6CBAE342D9AF08A0053C5AB /* Mix-Recording */;
 			targetProxy = C6CBAE472D9AF08C0053C5AB /* PBXContainerItemProxy */;
 		};
 		C6CBAE522D9AF08C0053C5AB /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = C6CBAE342D9AF08A0053C5AB /* MacAudioRecorder */;
+			target = C6CBAE342D9AF08A0053C5AB /* Mix-Recording */;
 			targetProxy = C6CBAE512D9AF08C0053C5AB /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -353,7 +347,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.2;
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -410,7 +404,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.2;
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
@@ -423,25 +417,25 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = MacAudioRecorder/MacAudioRecorder.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Mix-Recording/Mix-Recording.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"MacAudioRecorder/Preview Content\"";
-				DEVELOPMENT_TEAM = SRQ27N8367;
+				DEVELOPMENT_ASSET_PATHS = "\"Mix-Recording/Preview Content\"";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "We need access to your microphone to record audio.";
+				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "We need screen recording permission to capture system audio.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.MacAudioRecorder;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.Mix-Recording;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -453,25 +447,25 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = MacAudioRecorder/MacAudioRecorder.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Mix-Recording/Mix-Recording.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_ASSET_PATHS = "\"MacAudioRecorder/Preview Content\"";
-				DEVELOPMENT_TEAM = SRQ27N8367;
+				DEVELOPMENT_ASSET_PATHS = "\"Mix-Recording/Preview Content\"";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_LSApplicationCategoryType = "";
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "We need access to your microphone to record audio.";
+				INFOPLIST_KEY_NSScreenCaptureUsageDescription = "We need screen recording permission to capture system audio.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.MacAudioRecorder;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.Mix-Recording;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -484,15 +478,14 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = SRQ27N8367;
 				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.2;
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.MacAudioRecorderTests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.Mix-RecordingTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MacAudioRecorder.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MacAudioRecorder";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Mix-Recording.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Mix-Recording";
 			};
 			name = Debug;
 		};
@@ -502,15 +495,14 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = SRQ27N8367;
 				GENERATE_INFOPLIST_FILE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 15.2;
+				MACOSX_DEPLOYMENT_TARGET = 13.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.MacAudioRecorderTests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.Mix-RecordingTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MacAudioRecorder.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MacAudioRecorder";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Mix-Recording.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Mix-Recording";
 			};
 			name = Release;
 		};
@@ -519,14 +511,13 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = SRQ27N8367;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.MacAudioRecorderUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.Mix-RecordingUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = MacAudioRecorder;
+				TEST_TARGET_NAME = Mix-Recording;
 			};
 			name = Debug;
 		};
@@ -535,21 +526,20 @@
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = SRQ27N8367;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.MacAudioRecorderUITests;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ianpilon.Mix-RecordingUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = MacAudioRecorder;
+				TEST_TARGET_NAME = Mix-Recording;
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		C6CBAE302D9AF08A0053C5AB /* Build configuration list for PBXProject "MacAudioRecorder" */ = {
+		C6CBAE302D9AF08A0053C5AB /* Build configuration list for PBXProject "Mix-Recording" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C6CBAE582D9AF08C0053C5AB /* Debug */,
@@ -558,7 +548,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C6CBAE5A2D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "MacAudioRecorder" */ = {
+		C6CBAE5A2D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "Mix-Recording" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C6CBAE5B2D9AF08C0053C5AB /* Debug */,
@@ -567,7 +557,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C6CBAE5D2D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "MacAudioRecorderTests" */ = {
+		C6CBAE5D2D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "Mix-RecordingTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C6CBAE5E2D9AF08C0053C5AB /* Debug */,
@@ -576,7 +566,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		C6CBAE602D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "MacAudioRecorderUITests" */ = {
+		C6CBAE602D9AF08C0053C5AB /* Build configuration list for PBXNativeTarget "Mix-RecordingUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C6CBAE612D9AF08C0053C5AB /* Debug */,

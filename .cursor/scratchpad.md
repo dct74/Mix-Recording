@@ -175,7 +175,7 @@ With the UI structure in place, the next goal is to implement the core functiona
 - Outlined new approach using `CombinedAudioEngine` with `AVAudioEngine` and `ScreenCaptureKit`.
 - Created task breakdown (Tasks 5-12) for implementation.
 - **Task 5 complete:** Created `CombinedAudioEngine.swift` file with basic class structure.
-- **Action Required:** User needs to manually add `CombinedAudioEngine.swift` to the `MacAudioRecorder` target in Xcode ("Add Files to Project...") to ensure it's included in the build.
+- **Action Required:** User needs to manually add `CombinedAudioEngine.swift` to the `Mix-Recording` target in Xcode ("Add Files to Project...") to ensure it's included in the build.
 - User confirmed Deployment Target updated to 13.5 and build is successful.
 - **Task 6 complete:** Implemented basic `AVAudioEngine` start/stop logic.
 - **Starting Task 7:** Implement Microphone Input.

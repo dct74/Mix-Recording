@@ -1,13 +1,13 @@
 //
-//  MacAudioRecorderUITests.swift
-//  MacAudioRecorderUITests
+//  Mix-RecordingUITests.swift
+//  Mix-RecordingUITests
 //
 //  Created by Ian Pilon on 2025-03-31.
 //
 
 import XCTest
 
-final class MacAudioRecorderUITests: XCTestCase {
+final class MixRecordingUITests: XCTestCase {
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.

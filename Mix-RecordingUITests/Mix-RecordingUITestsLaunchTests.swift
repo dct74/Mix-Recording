@@ -1,13 +1,13 @@
 //
-//  MacAudioRecorderUITestsLaunchTests.swift
-//  MacAudioRecorderUITests
+//  Mix-RecordingUITestsLaunchTests.swift
+//  Mix-RecordingUITests
 //
 //  Created by Ian Pilon on 2025-03-31.
 //
 
 import XCTest
 
-final class MacAudioRecorderUITestsLaunchTests: XCTestCase {
+final class MixRecordingUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

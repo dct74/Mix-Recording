@@ -1,4 +1,4 @@
-# MacAudioRecorder
+# Mix-Recording
 
 A simple macOS audio recording application created with Swift.
 
@@ -10,8 +10,8 @@ A simple macOS audio recording application created with Swift.
 
 ## Requirements
 
-- macOS 11.0+
-- Xcode 13.0+
+- macOS 13.5+
+- Xcode 16.0+
 - Swift 5.5+
 
 ## How to Use
@@ -22,7 +22,10 @@ A simple macOS audio recording application created with Swift.
 
 ## Project Structure
 
-- `AppDelegate.swift`: Main application delegate
-- `AudioRecorder.swift`: Audio recording functionality
-- `MainViewController.swift`: Main view controller for the application
-- `MainMenu.xib`: Main menu interface
+- `MixRecordingApp.swift`: App entry point
+- `ContentView.swift`: SwiftUI view and view model
+- `AudioRecorder.swift`: Recording engine (microphone, system audio, combined)
+- `AudioFileWriter.swift`: Off-thread audio writer used by the recording paths
+- `CombinedAudioEngine.swift`: Microphone + system audio mixing engine
+- `Mix-Recording/Assets.xcassets`: App icon and accent color
+- `Info.plist`: Permission usage descriptions

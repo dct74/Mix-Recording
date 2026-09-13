@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
 
+@MainActor
 class AudioRecorderViewModel: ObservableObject {
     private let audioRecorder = AudioRecorder()
     
@@ -11,19 +12,21 @@ class AudioRecorderViewModel: ObservableObject {
     @Published var selectedSource: AudioSource = .microphone
     
     init() {
-        // Set up observers for recording/playback state changes
+        // Set up observers for recording/playback state changes. The recorder calls these on the
+        // main actor, so no further hop is needed.
         audioRecorder.recordingStateChanged = { [weak self] isRecording in
-            DispatchQueue.main.async {
-                self?.isRecording = isRecording
-                self?.statusMessage = isRecording ? "Recording..." : "Ready"
-            }
+            self?.isRecording = isRecording
+            self?.statusMessage = isRecording ? "Recording..." : "Ready"
         }
         
         audioRecorder.playbackStateChanged = { [weak self] isPlaying in
-            DispatchQueue.main.async {
-                self?.isPlaying = isPlaying
-                self?.statusMessage = isPlaying ? "Playing..." : "Ready"
-            }
+            self?.isPlaying = isPlaying
+            self?.statusMessage = isPlaying ? "Playing..." : "Ready"
+        }
+        
+        // Work that is neither recording nor playback (e.g. mixing a combined recording)
+        audioRecorder.statusChanged = { [weak self] message in
+            self?.statusMessage = message
         }
     }
     
@@ -35,80 +38,89 @@ class AudioRecorderViewModel: ObservableObject {
     func toggleRecording() {
         if audioRecorder.isRecording {
             audioRecorder.stopRecording()
-        } else {
-            // For system audio and combined recording, explicitly check screen recording permission
-            if selectedSource == .systemAudio || selectedSource == .combined {
-                let hasPermission = CGPreflightScreenCaptureAccess()
-                if !hasPermission {
-                    // Show alert about screen recording permission
-                    DispatchQueue.main.async {
-                        let alert = NSAlert()
-                        alert.messageText = "Screen Recording Permission Required"
-                        let featureName = self.selectedSource == .combined ? "combined recording" : "system audio"
-                        alert.informativeText = "To record \(featureName), you must grant screen recording permission for this app in System Settings > Privacy & Security > Screen Recording."
-                        alert.alertStyle = .warning
-                        alert.addButton(withTitle: "Open Settings")
-                        alert.addButton(withTitle: "Cancel")
-                        
-                        let response = alert.runModal()
-                        if response == .alertFirstButtonReturn {
-                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
-                        }
-                    }
-                    self.statusMessage = "Screen recording permission required"
-                    return
-                }
+            return
+        }
+        
+        // System audio needs screen recording permission. Ask the system first: that call is what
+        // registers the app in System Settings, otherwise the user finds nothing to enable there.
+        if selectedSource == .systemAudio || selectedSource == .combined,
+           !CGPreflightScreenCaptureAccess() {
+            _ = CGRequestScreenCaptureAccess()
+            presentScreenRecordingPermissionAlert()
+            statusMessage = "Screen recording permission required"
+            return
+        }
+        
+        // System-audio-only recording never touches the microphone
+        if selectedSource == .systemAudio {
+            startRecording()
+            return
+        }
+        
+        audioRecorder.requestPermission { [weak self] granted in
+            guard let self = self else { return }
+            guard granted else {
+                self.statusMessage = "Microphone access denied - enable it in System Settings > Privacy & Security > Microphone"
+                return
             }
-            
-            // Standard permission check
-            audioRecorder.requestPermission { [weak self] hasInputDevices in
-                if hasInputDevices {
-                    // Set the audio source before recording
-                    if let source = self?.selectedSource {
-                        self?.audioRecorder.setAudioSource(source)
-                    }
-                    _ = self?.audioRecorder.startRecording()
-                } else {
-                    self?.statusMessage = "No audio input devices found"
-                }
-            }
+            self.startRecording()
+        }
+    }
+    
+    private func startRecording() {
+        audioRecorder.setAudioSource(selectedSource)
+        if !audioRecorder.startRecording() {
+            statusMessage = "Could not start recording - check microphone and screen recording permissions"
+        }
+    }
+    
+    private func presentScreenRecordingPermissionAlert() {
+        let alert = NSAlert()
+        alert.messageText = "Screen Recording Permission Required"
+        let featureName = selectedSource == .combined ? "combined recording" : "system audio"
+        alert.informativeText = "To record \(featureName), you must grant screen recording permission for this app in System Settings > Privacy & Security > Screen Recording."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Open Settings")
+        alert.addButton(withTitle: "Cancel")
+        
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
         }
     }
     
     func togglePlayback() {
         if audioRecorder.isPlaying {
             audioRecorder.stopPlayback()
-        } else {
-            _ = audioRecorder.startPlayback()
+        } else if !audioRecorder.startPlayback() {
+            statusMessage = "Nothing to play - record something first"
         }
     }
     
     func saveRecording() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [UTType(filenameExtension: "m4a")!]
-        panel.nameFieldStringValue = "recording.m4a"
+        // Match the container the recorder actually produced and name it per source
+        let fileExtension = audioRecorder.recordingFileExtension
+        panel.allowedContentTypes = UTType(filenameExtension: fileExtension).map { [$0] } ?? [.audio]
+        panel.nameFieldStringValue = audioRecorder.suggestedSaveFileName
         panel.message = "Save your recording"
+        panel.directoryURL = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask).first
         
         panel.begin { [weak self] result in
             if result == .OK, let url = panel.url {
                 self?.audioRecorder.saveRecording(to: url) { success in
-                    DispatchQueue.main.async {
-                        self?.statusMessage = success ? "Recording saved" : "Failed to save"
-                    }
+                    self?.statusMessage = success ? "Recording saved" : "Failed to save"
                 }
             }
         }
     }
 }
 
-// ContentView definition with modular components
-@available(macOS 11.0, *)
 struct ContentView: View {
     @StateObject private var viewModel = AudioRecorderViewModel()
     
     var body: some View {
         VStack(spacing: 20) {
-            Text("Audio Recorder")
+            Text("Mix-Recording")
                 .font(.largeTitle)
                 .padding(.top, 30)
             
@@ -135,13 +147,10 @@ struct ContentView: View {
                 saveButton
             }
             
-            // Combined Recording is now part of the source picker above
-            
             Spacer()
         }
         .padding()
         .frame(width: 500, height: 300)
-        // No longer need the sheet presentation for combined recording
     }
     
     // MARK: - UI Components
@@ -218,19 +227,6 @@ extension View {
     }
 }
 
-// Custom modifier for button styling (for use in older styling code)
-struct ButtonStyleModifier: ViewModifier {
-    let color: Color
-    
-    func body(content: Content) -> some View {
-        // Use traditional styling approaches for backward compatibility
-        content
-            .foregroundColor(.white)
-            .background(color)
-    }
-}
-
-@available(macOS 11.0, *)
 #Preview {
     ContentView()
 }

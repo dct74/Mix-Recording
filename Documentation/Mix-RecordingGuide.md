@@ -1,22 +1,23 @@
-# MacAudioRecorder Project Guide
+# Mix-Recording Project Guide
 
 ## Project Overview
-MacAudioRecorder is a macOS application built with SwiftUI that allows users to record, play, and save audio files. This document provides a comprehensive guide to the project structure, key files, and instructions for resolving common issues.
+Mix-Recording is a macOS application built with SwiftUI that allows users to record, play, and save audio files. This document provides a comprehensive guide to the project structure, key files, and instructions for resolving common issues.
 
 ## Key Files
 
-### 1. AudioRecorderApp.swift
+> Note: the source listings below are illustrative and may lag behind the current code. The tree that is actually compiled is `MixRecordingApp.swift`, `ContentView.swift`, `AudioRecorder.swift` and `CombinedAudioEngine.swift`.
+
+### 1. MixRecordingApp.swift
 ```swift
 import SwiftUI
 
 @main
-struct AudioRecorderApp: App {
+struct MixRecordingApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(width: 500, height: 300)
+                .frame(minWidth: 500, minHeight: 300)
         }
-        .windowStyle(.hiddenTitleBar)
     }
 }
 ```
@@ -330,33 +331,22 @@ Ensure this file contains:
 </plist>
 ```
 
-## Fixing Duplicate File Issues
+## Duplicate File Issues (resolved)
 
-Your current project has multiple ContentView definitions across different files, causing build errors. To fix this:
+The project used to ship several duplicate definitions (`ContentView`, `ButtonStyleModifier`, `CombinedRecordingView`, `AudioRecorderApp`) and an unused `AppDelegate`/`MainViewController`. Those files have been removed; the target now compiles exactly:
 
-1. **Clean up duplicate files**:
-   - In Xcode, in the project navigator (left panel), search for "ContentView"
-   - For each duplicate (except for the main one at `/Users/ianpilon/CascadeProjects/MacAudioRecorder/ContentView.swift`):
-     - Select the file
-     - In the File Inspector (right panel), find "Target Membership"
-     - Uncheck the box for "MacAudioRecorder"
+- `MixRecordingApp.swift` (the only `@main` entry point)
+- `ContentView.swift`
+- `AudioRecorder.swift`
+- `CombinedAudioEngine.swift`
 
-2. **Fix app entry point conflicts**:
-   - Only one file should have the `@main` attribute
-   - Either use AudioRecorderApp.swift or MacAudioRecorderApp.swift, not both
-
-3. **Remove AppDelegate.swift if not needed**:
-   - If using the SwiftUI App lifecycle, you don't need AppDelegate.swift
-
-4. **Clean build folder and rebuild**:
-   - Product → Clean Build Folder (⇧⌘K)
-   - Build again (⌘B)
+If you add a file back, keep one definition per type and one `@main` per target.
 
 ## Project Configuration
 
-- **Deployment Target**: macOS 11.0 (minimum for SwiftUI compatibility)
-- **Privacy Permissions**: Microphone access required
-- **App Sandbox**: Enable with microphone and file access permissions
+- **Deployment Target**: macOS 13.5
+- **Privacy Permissions**: Microphone and screen recording access required
+- **App Sandbox**: Enabled, with `com.apple.security.device.audio-input` and `com.apple.security.files.user-selected.read-write`
 
 ## Using the App
 

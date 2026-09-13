@@ -41,7 +41,7 @@ This folder contains all the technical documentation, analysis, and implementati
   📊 Technical report on system audio recording implementation
 
 ### 📖 **User & Project Documentation**
-- **[MacAudioRecorderGuide.md](./MacAudioRecorderGuide.md)** *(11.9 KB)*  
+- **[Mix-RecordingGuide.md](./Mix-RecordingGuide.md)** *(11.9 KB)*  
   📖 Comprehensive user guide and feature documentation
 
 - **[README.md](./README.md)** *(598 B)*  
@@ -65,7 +65,7 @@ Files explaining the system design and implementation:
 
 ### **Project Documentation** 📚
 General project and user documentation:
-- `MacAudioRecorderGuide.md` - User guide
+- `Mix-RecordingGuide.md` - User guide
 - `README.md` - Project overview
 - `SystemAudioRecordingReport.md` - Technical report
 

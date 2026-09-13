@@ -1,7 +1,7 @@
 # Detailed Report: System Audio Recording Implementation Efforts
 
 ## Summary of Attempts and Issues
-This report details our systematic efforts to implement system audio recording in the MacAudioRecorder app. We've explored multiple approaches, encountering both persistent and resolved issues along the way.
+This report details our systematic efforts to implement system audio recording in the Mix-Recording app. We've explored multiple approaches, encountering both persistent and resolved issues along the way.
 
 ## Approaches Attempted
 

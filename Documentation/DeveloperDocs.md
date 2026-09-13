@@ -1,8 +1,8 @@
-# MacAudioRecorder Developer Documentation
+# Mix-Recording Developer Documentation
 
 ## Overview
 
-This documentation provides detailed technical information for developers working with the MacAudioRecorder codebase. It covers implementation details, class structures, key methods, and best practices for maintenance and extension.
+This documentation provides detailed technical information for developers working with the Mix-Recording codebase. It covers implementation details, class structures, key methods, and best practices for maintenance and extension.
 
 ## Table of Contents
 
@@ -18,16 +18,19 @@ This documentation provides detailed technical information for developers workin
 
 ## Project Structure
 
-The MacAudioRecorder project follows a standard Swift/SwiftUI application structure with MVVM architecture:
+The Mix-Recording project follows a standard Swift/SwiftUI application structure with MVVM architecture:
 
 ```
-MacAudioRecorder/
-├── ContentView.swift           # Main SwiftUI view
-├── MacAudioRecorderApp.swift   # App entry point
+Mix-Recording/
+├── ContentView.swift           # Main SwiftUI view and view model
+├── MixRecordingApp.swift   # App entry point
 ├── AudioRecorder.swift         # Core recording functionality
-├── AudioRecorderViewModel.swift # ViewModel connecting UI to AudioRecorder
-├── FileLogger.swift            # Diagnostic logging functionality
-└── Resources/                  # App resources
+├── AudioFileWriter.swift       # Off-thread audio writer (preallocated buffer pool)
+├── AudioMixdown.swift          # Offline mixdown for combined recordings
+├── Mix-Recording/
+│   ├── Assets.xcassets         # App icon and accent color
+│   └── Mix-Recording.entitlements
+└── Info.plist                  # Permission usage descriptions
 ```
 
 ## Core Classes
@@ -154,14 +157,11 @@ func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuff
           let manager = screenCaptureManager as? ScreenCaptureManager,
           let audioFile = manager.audioFile else { return }
     
-    do {
-        // Key steps:
-        // 1. Create temporary file with AVAssetWriter
-        // 2. Write CMSampleBuffer directly to asset writer
-        // 3. Read back with AVAudioFile
-        // 4. Write to final destination
-    } catch {
-        // Error handling
+    // The sample buffer is copied into an AVAudioPCMBuffer (CMSampleBufferCopyPCMDataIntoAudioBufferList)
+    // and written on a dedicated serial queue. The output file is created from the first buffer so
+    // its processing format matches the capture stream exactly - no temporary file is involved.
+    manager.writeQueue.async {
+        // create manager.audioFile lazily, then try manager.audioFile?.write(from: pcmBuffer)
     }
 }
 ```
@@ -203,17 +203,7 @@ The application implements comprehensive error handling at multiple levels:
 1. **Function-level error handling**: Each method returns a Bool success indicator
 2. **Do-catch blocks**: For operations that might throw errors
 3. **Delegate error methods**: For asynchronous errors via delegates
-4. **FileLogger**: Persistent logging of errors for diagnostics
-
-```swift
-class FileLogger {
-    static let shared = FileLogger()
-    
-    func log(_ message: String) {
-        // Write message to log file with timestamp
-    }
-}
-```
+4. **Standard output**: Diagnostic messages are printed while developing; the app does not write a log file
 
 ## State Management
 
@@ -296,4 +286,4 @@ Implement new output formats by adding conversion methods in the `saveRecording`
 
 ## Conclusion
 
-The MacAudioRecorder implementation demonstrates how to build a robust audio recording solution that handles the complexities of system audio capture on macOS. By carefully managing version compatibility, error handling, and using Apple's recommended APIs, the application provides reliable recording functionality across different macOS versions.
+The Mix-Recording implementation demonstrates how to build a robust audio recording solution that handles the complexities of system audio capture on macOS. By carefully managing version compatibility, error handling, and using Apple's recommended APIs, the application provides reliable recording functionality across different macOS versions.

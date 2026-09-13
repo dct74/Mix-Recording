@@ -1,6 +1,6 @@
 # Explaining System Audio Capture on macOS using ScreenCaptureKit
 
-This document details the process used by the MacAudioRecorder application to capture system audio on macOS 13.0 and later, primarily leveraging the `ScreenCaptureKit` framework. This method requires obtaining Screen Recording permissions from the user.
+This document details the process used by the Mix-Recording application to capture system audio on macOS 13.0 and later, primarily leveraging the `ScreenCaptureKit` framework. This method requires obtaining Screen Recording permissions from the user.
 
 ## Core Approach: ScreenCaptureKit
 
@@ -79,20 +79,19 @@ The setup involves configuring and starting an `SCStream`:
 
 ## Handling Audio Data (`SCStreamOutput` Delegate)
 
-The most complex part is processing the raw audio data received in the `stream(_:didOutputSampleBuffer:ofType:)` delegate method. The raw data comes as `CMSampleBuffer` objects.
+The raw audio arrives as `CMSampleBuffer` objects in the `stream(_:didOutputSampleBuffer:ofType:)` delegate method.
 
-Directly writing these `CMSampleBuffer` objects to the final `AVAudioFile` can be problematic due to format complexities. This application uses an intermediate temporary file approach for *each buffer*:
+An earlier version of this app wrote **each buffer** through its own `AVAssetWriter` (create a temporary file, write one buffer, finalize, read it back with `AVAudioFile`, append to the final file, delete the temp file). That is roughly 43 container write/read cycles per second, produced out-of-order writes and heavy disk churn, and has been replaced.
 
-1.  **Receive Buffer**: The delegate method receives an audio `CMSampleBuffer`.
-2.  **Create Temporary File**: A unique temporary file URL is generated (e.g., in `FileManager.default.temporaryDirectory`).
-3.  **Setup `AVAssetWriter`**: An `AVAssetWriter` and `AVAssetWriterInput` are configured for this *temporary* file, using the desired final audio format (e.g., AAC).
-4.  **Write Single Buffer**: The *incoming `CMSampleBuffer`* is appended to the temporary file's `AVAssetWriterInput`.
-5.  **Finalize Temporary File**: Writing to the `AVAssetWriter` is immediately started and finished (`assetWriter.startWriting()`, `assetWriter.startSession(...)`, `writerInput.append(sampleBuffer)`, `writerInput.markAsFinished()`, `assetWriter.finishWriting { ... }`).
-6.  **Read Temporary File**: Inside the `finishWriting` completion handler:
-    *   The temporary file is opened for reading using `AVAudioFile(forReading:)`.
-    *   Its entire content is read into an `AVAudioPCMBuffer`.
-7.  **Write to Final File**: The `AVAudioPCMBuffer` (now correctly formatted) is written to the main, persistent `AVAudioFile` created during setup (`finalAudioFile.write(from: buffer)`).
-8.  **Cleanup**: The temporary file is deleted.
+The current implementation:
+
+1. **Receive buffer**: the delegate receives an audio `CMSampleBuffer` (ScreenCaptureKit delivers deinterleaved Float32 PCM).
+2. **Copy out**: `CMSampleBufferCopyPCMDataIntoAudioBufferList` copies the samples into an `AVAudioPCMBuffer`, so nothing references capture-owned memory after the callback returns.
+3. **Hand off**: the buffer is written on a dedicated serial queue (`ScreenCaptureManager.writeQueue`), never on the capture callback itself.
+4. **Create once**: `AVAudioFile(forWriting:settings:commonFormat:interleaved:)` is created from the first buffer, so the file's processing format matches the stream exactly.
+5. **Write**: `AVAudioFile.write(from:)` appends the samples; the file is closed only after the write queue has been drained.
+
+Note that the samples are only *read* while the session is current: `isCapturing` is cleared on the write queue itself, so a late callback cannot recreate a file that has already been promoted to the finished recording.
 
 ```swift
 // Inside stream(_:didOutputSampleBuffer:ofType:)

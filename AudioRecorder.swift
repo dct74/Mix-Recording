@@ -1,51 +1,7 @@
 import AVFoundation
 import Cocoa
-import CoreAudio
 import CoreMedia
 import ScreenCaptureKit
-
-// File logger for diagnostics
-class FileLogger {
-    static let shared = FileLogger()
-    
-    private var logFileURL: URL? = {
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        return documentsPath.appendingPathComponent("audio_recorder_log.txt")
-    }()
-    
-    private init() {
-        // Clear previous log file
-        if let url = logFileURL, FileManager.default.fileExists(atPath: url.path) {
-            try? FileManager.default.removeItem(at: url)
-        }
-        
-        // Write header
-        log("=== AUDIO RECORDER LOG ===\nStarted at \(Date())\n")
-    }
-    
-    func log(_ message: String) {
-        guard let url = logFileURL else { return }
-        
-        let timestamp = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
-        let logMessage = "[\(timestamp)] \(message)\n"
-        
-        if let data = logMessage.data(using: .utf8) {
-            if FileManager.default.fileExists(atPath: url.path) {
-                if let fileHandle = try? FileHandle(forWritingTo: url) {
-                    fileHandle.seekToEndOfFile()
-                    fileHandle.write(data)
-                    fileHandle.closeFile()
-                }
-            } else {
-                try? data.write(to: url)
-            }
-        }
-    }
-    
-    func getLogFilePath() -> String {
-        return logFileURL?.path ?? "No log file available"
-    }
-}
 
 enum AudioSource {
     case microphone
@@ -53,62 +9,241 @@ enum AudioSource {
     case combined
 }
 
+@MainActor
 class AudioRecorder: NSObject {
-    // For combined recording mode
-    private var combinedAudioEngine: CombinedAudioEngine?
-    // Counter for audio samples
-    private static var appendedSampleCount = 0
-    
-    // Counter for audio frames in ScreenCaptureKit
-    private var audioFrameCounter = 0
+    // Combined recording captures the microphone and the system audio separately and mixes them
+    // offline when recording stops. Nothing is routed to the output device, so the microphone is
+    // never monitored and cannot re-record its own delayed signal (the echo users heard before).
+    private var combinedMicURL: URL
+    private var combinedMicStart: Date?
+    private var isMixingCombined = false
     
     // Audio recording properties
     private var audioRecorder: AVAudioRecorder?
     private var audioPlayer: AVAudioPlayer?
     
-    // Audio capture components (used for both microphone and system audio recording)
-    private var audioEngine: AVAudioEngine?
-    private var mixerNode: AVAudioMixerNode?
-    private var audioFile: AVAudioFile?
+    // The running ScreenCaptureKit session, if any. Only ever touched on the main actor; all of
+    // the session's own state lives inside SystemAudioCapture, behind its own queues and lock.
+    private var systemAudioSession: SystemAudioCapture?
     
-    // For direct audio and screen capture (CGDisplayStream approach - Legacy)
-    private var displayStream: CGDisplayStream?
-    private var videoWriter: AVAssetWriter?
-    private var videoWriterInput: AVAssetWriterInput?
-    private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
-    private var recordingStartTime: CMTime?
-    private var tempVideoURL: URL?
-    private var tempAudioURL: URL?
-    private var screenCaptureQueue = DispatchQueue(label: "com.display.stream")
-    
-    // For modern ScreenCaptureKit approach (macOS 13.0+)
-    // We use a container class to avoid stored property availability issues
-    private var screenCaptureManager: Any? = nil
-    private var scOutputURL: URL?
-
-    // Container class for macOS 13.0+ ScreenCaptureKit functionality
-    @available(macOS 13.0, *)
-    private class ScreenCaptureManager: NSObject, SCStreamDelegate {
-        var stream: SCStream?
-        var audioFile: AVAudioFile?
-        var captureQueue = DispatchQueue(label: "com.screencapturekit.queue", qos: .userInitiated)
+    // Owns a ScreenCaptureKit audio capture session and runs it entirely off the main actor.
+    // Its state is either immutable (`outputURL`, `id`) or guarded by `stateLock`/`writeQueue`,
+    // so the capture callback never races with the main actor.
+    private final class SystemAudioCapture: NSObject, SCStreamDelegate, SCStreamOutput {
+        let id = UUID()
+        let outputURL: URL
         
-        // SCStreamDelegate implementation
-        func stream(_ stream: SCStream, didStopWithError error: Error) {
-            print("Stream stopped with error: \(error.localizedDescription)")
-            FileLogger.shared.log("Stream stopped with error: \(error.localizedDescription)")
+        // Called on the main thread when the stream dies on its own
+        var onError: (@Sendable (UUID, Error) -> Void)?
+        
+        private let writer = AudioFileWriter()
+        private let captureQueue = DispatchQueue(label: "com.screencapturekit.queue", qos: .userInitiated)
+        
+        // `stream`, `capturing` and `cancelled` are touched from the main thread (stop/cancel) and
+        // from the start-up task, so they live behind one lock.
+        private let stateLock = NSLock()
+        private var capturing = false
+        private var cancelled = false
+        private var stream: SCStream?
+        private var firstBufferDate: Date?
+        private var writerOpened = false   // only used on captureQueue
+        
+        init(outputURL: URL) {
+            self.outputURL = outputURL
+        }
+        
+        private func withState<T>(_ body: () -> T) -> T {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return body()
+        }
+        
+        var isCapturing: Bool { withState { capturing } }
+        
+        // When the first samples arrived - used to line this capture up with the microphone
+        var firstBufferAt: Date? { withState { firstBufferDate } }
+        
+        // Starts capture. The completion runs on the main thread.
+        func start(completion: @escaping @MainActor (Result<Void, Error>) -> Void) {
+            Task {
+                do {
+                    let availableContent = try await SCShareableContent.current
+                    guard let display = availableContent.displays.first else {
+                        throw SystemAudioError.noDisplay
+                    }
+                    
+                    let filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+                    
+                    let configuration = SCStreamConfiguration()
+                    configuration.capturesAudio = true
+                    configuration.excludesCurrentProcessAudio = true
+                    configuration.sampleRate = 44100
+                    configuration.channelCount = 2
+                    // Minimal video surface: we only want the audio stream
+                    configuration.width = 2
+                    configuration.height = 2
+                    configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+                    
+                    let newStream = SCStream(filter: filter, configuration: configuration, delegate: self)
+                    
+                    // Refuse to start if the session was cancelled while awaiting the content
+                    let shouldStart = withState { () -> Bool in
+                        guard !cancelled else { return false }
+                        stream = newStream
+                        capturing = true
+                        return true
+                    }
+                    guard shouldStart else {
+                        await completion(.failure(SystemAudioError.cancelled))
+                        return
+                    }
+                    
+                    try newStream.addStreamOutput(self, type: .audio, sampleHandlerQueue: captureQueue)
+                    try await newStream.startCapture()
+                    
+                    // The session may have been stopped while startCapture() was awaiting
+                    if withState({ cancelled }) {
+                        await Self.stopQuietly(newStream)
+                        await completion(.failure(SystemAudioError.cancelled))
+                        return
+                    }
+                    await completion(.success(()))
+                } catch {
+                    await completion(.failure(error))
+                }
+            }
+        }
+        
+        // Stops capture, closes the file and reports its size to the main thread.
+        func stop(completion: @escaping @MainActor (Int) -> Void) {
+            let streamToStop = withState { () -> SCStream? in
+                cancelled = true
+                capturing = false
+                let current = stream
+                stream = nil
+                return current
+            }
+            
+            let finish = {
+                let dropped = self.writer.close()
+                if dropped > 0 {
+                    print("WARNING: dropped \(dropped) system audio buffers while writing")
+                }
+                let size = (try? FileManager.default.attributesOfItem(atPath: self.outputURL.path)[.size] as? NSNumber)?.intValue ?? 0
+                Task { @MainActor in completion(size) }
+            }
+            
+            guard let streamToStop = streamToStop else {
+                finish()
+                return
+            }
+            streamToStop.stopCapture { _ in
+                finish()
+            }
+        }
+        
+        // Tears the session down without keeping anything (used when start-up failed)
+        func cancel() {
+            let streamToStop = withState { () -> SCStream? in
+                cancelled = true
+                capturing = false
+                let current = stream
+                stream = nil
+                return current
+            }
+            
+            let cleanup = {
+                self.writer.close()
+                try? FileManager.default.removeItem(at: self.outputURL)
+            }
+            
+            guard let streamToStop = streamToStop else {
+                cleanup()
+                return
+            }
+            streamToStop.stopCapture { _ in
+                cleanup()
+            }
+        }
+        
+        private static func stopQuietly(_ stream: SCStream) async {
+            do {
+                try await stream.stopCapture()
+            } catch {
+                print("Error stopping capture: \(error.localizedDescription)")
+            }
+        }
+        
+        // MARK: SCStreamDelegate
+        
+        nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
+            onError?(id, error)
+        }
+        
+        // MARK: SCStreamOutput
+        
+        nonisolated func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+            guard type == .audio,
+                  isCapturing,
+                  let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
+            
+            let format = AVAudioFormat(cmAudioFormatDescription: formatDescription)
+            guard let pcmBuffer = Self.makePCMBuffer(from: sampleBuffer, format: format) else { return }
+            
+            if !writerOpened {
+                withState { if firstBufferDate == nil { firstBufferDate = Date() } }
+                do {
+                    try writer.open(url: outputURL,
+                                    settings: Self.audioFileSettings(for: format),
+                                    format: format,
+                                    capacity: pcmBuffer.frameCapacity)
+                    writerOpened = true
+                } catch {
+                    print("ERROR creating system audio file: \(error.localizedDescription)")
+                    withState { capturing = false }
+                    return
+                }
+            }
+            
+            writer.write(pcmBuffer)
+        }
+        
+        // Copies the captured samples into an AVAudioPCMBuffer (ScreenCaptureKit audio is PCM)
+        private static func makePCMBuffer(from sampleBuffer: CMSampleBuffer, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+            let frameCount = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
+            guard frameCount > 0, let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+                return nil
+            }
+            buffer.frameLength = frameCount
+            let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(sampleBuffer, at: 0, frameCount: Int32(frameCount), into: buffer.mutableAudioBufferList)
+            guard status == noErr else {
+                print("Could not copy system audio samples (status \(status))")
+                return nil
+            }
+            return buffer
+        }
+        
+        private static func audioFileSettings(for format: AVAudioFormat) -> [String: Any] {
+            [
+                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+                AVSampleRateKey: format.sampleRate,
+                AVNumberOfChannelsKey: format.channelCount,
+                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+            ]
         }
     }
     
-    // Previous implementation components (kept for reference)
-    private var captureSession: AVCaptureSession?
-    private var screenInput: AVCaptureScreenInput?
-    private var movieOutput: AVCaptureMovieFileOutput?
-    private var audioOutput: AVCaptureAudioDataOutput?
-    private var tempFileURL: URL?
-    private var audioWriter: AVAssetWriter?
-    private var audioWriterInput: AVAssetWriterInput?
-    private var audioQueue = DispatchQueue(label: "audio.recording.queue")
+    enum SystemAudioError: LocalizedError {
+        case noDisplay
+        case cancelled
+        
+        var errorDescription: String? {
+            switch self {
+            case .noDisplay: return "No display available for capture"
+            case .cancelled: return "Capture session was cancelled"
+            }
+        }
+    }
     
     // Recording state
     private(set) var isRecording = false
@@ -121,51 +256,97 @@ class AudioRecorder: NSObject {
     private var recordingURL: URL?
     private var micRecordingURL: URL
     private var systemAudioRecordingURL: URL
-    private var combinedRecordingURL: URL
     
     // Completion handlers
-    var recordingStateChanged: ((Bool) -> Void)?
-    var playbackStateChanged: ((Bool) -> Void)?
+    var recordingStateChanged: (@MainActor (Bool) -> Void)?
+    var playbackStateChanged: (@MainActor (Bool) -> Void)?
+    // Reports work that is neither recording nor playback, e.g. mixing a combined recording
+    var statusChanged: (@MainActor (String) -> Void)?
+    
+    // Trips the running offline mix when the user asks to stop while it is mixing
+    private final class CancellationFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        func cancel() { lock.lock(); cancelled = true; lock.unlock() }
+        var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+    }
+    private var mixCancellation: CancellationFlag?
+    private var mixingTask: Task<Void, Never>?
+    private var terminateObserver: NSObjectProtocol?
     
     override init() {
-        // Set up recording file URLs in the Documents directory
-        let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        self.micRecordingURL = documentsPath.appendingPathComponent("mic_recording.m4a")
-        self.systemAudioRecordingURL = documentsPath.appendingPathComponent("system_audio_recording.m4a")
-        self.combinedRecordingURL = documentsPath.appendingPathComponent("combined_recording.caf")
+        // Working files live in the temporary directory until the user saves them
+        let tempPath = FileManager.default.temporaryDirectory
+        self.micRecordingURL = tempPath.appendingPathComponent("mic_recording.m4a")
+        self.systemAudioRecordingURL = tempPath.appendingPathComponent("system_audio_recording.m4a")
+        self.combinedMicURL = tempPath.appendingPathComponent("combined_mic.m4a")
         
         // Default to microphone recording URL
         self.recordingURL = self.micRecordingURL
         
         super.init()
+        
+        // Discard anything left over from a previous run, and again when the app quits
+        AudioRecorder.cleanupUnsavedRecordings()
+        terminateObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            AudioRecorder.cleanupUnsavedRecordings()
+            MainActor.assumeIsolated { self?.cancelMixing() }
+        }
     }
     
-    func requestPermission(completion: @escaping (Bool) -> Void) {
-        // Request microphone permission
+    deinit {
+        if let terminateObserver = terminateObserver {
+            NotificationCenter.default.removeObserver(terminateObserver)
+        }
+    }
+    
+    // MARK: - Unsaved Recording Cleanup
+    
+    // Deletes working files for recordings the user never saved. Recordings live in the
+    // temporary directory until Save moves them out; the Documents entry is a leftover
+    // from older builds that wrote diagnostics there.
+    nonisolated static func cleanupUnsavedRecordings() {
+        let fileManager = FileManager.default
+        let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let tempPath = fileManager.temporaryDirectory
+        
+        var targets = [
+            documentsPath.appendingPathComponent("audio_recorder_log.txt"),
+            tempPath.appendingPathComponent("mic_recording.m4a"),
+            tempPath.appendingPathComponent("system_audio_recording.m4a"),
+            tempPath.appendingPathComponent("combined_recording.caf")
+        ]
+        targets += matchingFiles(in: tempPath, prefix: "combined_recording_", pathExtension: "m4a")
+        targets += matchingFiles(in: tempPath, prefix: "combined_mic", pathExtension: "m4a")
+        targets += matchingFiles(in: tempPath, prefix: "combined_recording_", pathExtension: "caf")
+        targets += matchingFiles(in: tempPath, prefix: "system_audio_", pathExtension: "m4a")
+        targets += matchingFiles(in: tempPath, prefix: "temp_audio_", pathExtension: "m4a")
+        targets += matchingFiles(in: tempPath, prefix: "temp_video_", pathExtension: "mp4")
+        
+        for url in targets where fileManager.fileExists(atPath: url.path) {
+            do {
+                try fileManager.removeItem(at: url)
+                print("Cleaned up unsaved recording: \(url.path)")
+            } catch {
+                print("Could not clean up \(url.path): \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    nonisolated private static func matchingFiles(in directory: URL, prefix: String, pathExtension: String) -> [URL] {
+        let entries = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        return (entries ?? []).filter {
+            $0.pathExtension.caseInsensitiveCompare(pathExtension) == .orderedSame
+                && $0.lastPathComponent.hasPrefix(prefix)
+        }
+    }
+    
+    func requestPermission(completion: @escaping @MainActor (Bool) -> Void) {
+        // Only the microphone is requested here. Screen recording permission is handled where
+        // it is actually needed (the system audio / combined paths) so the user never sees two
+        // alerts for the same thing.
         AVCaptureDevice.requestAccess(for: .audio) { micPermission in
-            // Check screen recording permission (for system audio)
-            DispatchQueue.main.async {
-                // Check for screen recording permission which is required for system audio
-                if !CGPreflightScreenCaptureAccess() {
-                    // Try to request permission directly
-                    _ = CGRequestScreenCaptureAccess()
-                    
-                    // Show alert explaining screen recording permission requirements
-                    let alert = NSAlert()
-                    alert.messageText = "Screen Recording Permission Required"
-                    alert.informativeText = "To capture system audio, this app needs screen recording permission. Please open System Settings and grant this app access to screen recording."
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "Open Settings")
-                    alert.addButton(withTitle: "Later")
-                    
-                    let response = alert.runModal()
-                    if response == .alertFirstButtonReturn {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
-                    }
-                }
-                
-                // We'll proceed regardless of screen recording permission status
-                // The user can grant it when they try to record system audio
+            Task { @MainActor in
                 completion(micPermission)
             }
         }
@@ -177,33 +358,9 @@ class AudioRecorder: NSObject {
             stopRecording()
         }
         
-        // If previously in combined mode and switching away, clean up the engine
-        if selectedSource == .combined && source != .combined {
-            if #available(macOS 12.3, *) {
-                // Stop and release the combined audio engine
-                if let engine = combinedAudioEngine, engine.isRecording {
-                    engine.stopRecording()
-                }
-                combinedAudioEngine = nil
-                print("Cleaned up combined audio engine")
-            }
-        }
-        
         // Update the source
         selectedSource = source
-        FileLogger.shared.log("Audio source set to: \(source)")
-        
-        // Initialize combinedAudioEngine if combined mode is selected
-        if source == .combined {
-            if #available(macOS 12.3, *) {
-                if combinedAudioEngine == nil {
-                    print("Creating new CombinedAudioEngine")
-                    combinedAudioEngine = CombinedAudioEngine()
-                }
-            } else {
-                print("Combined recording requires macOS 12.3 or later")
-            }
-        }
+        print("Audio source set to: \(source)")
     }
     
     func startRecording() -> Bool {
@@ -256,537 +413,288 @@ class AudioRecorder: NSObject {
         print("Recording URL: \(recordingURL?.path ?? "Not set")")
         print("File exists: \(recordingURL != nil ? FileManager.default.fileExists(atPath: recordingURL!.path) : false)")
         
-        // Combined audio specific diagnostics
         if selectedSource == .combined {
-            if #available(macOS 12.3, *) {
-                if let engine = combinedAudioEngine {
-                    print("\n=== COMBINED AUDIO ENGINE DIAGNOSTICS ===")
-                    print("Engine initialized: Yes")
-                    print("Engine recording: \(engine.isRecording)")
-                    print("Engine completed URL: \(engine.completedRecordingURL?.path ?? "None")")
-                    engine.printDiagnostics() // Use the engine's own diagnostics
-                } else {
-                    print("Combined audio engine not initialized")
-                }
-            } else {
-                print("Combined audio requires macOS 12.3+, current OS not compatible")
-            }
+            print("Combined recording mixes the microphone and the system audio offline")
         }
         print("===================================\n")
     }
     
     private func startMicrophoneRecording() -> Bool {
+        guard let url = recordingURL else {
+            print("No recording URL available")
+            return false
+        }
+        guard startMicrophoneRecorder(at: url) else { return false }
+        isRecording = true
+        recordingStateChanged?(true)
+        return true
+    }
+    
+    // Starts an AVAudioRecorder on `url`. AVAudioRecorder writes straight to disk and never routes the
+    // microphone to the speakers, which is why the microphone-only and combined paths stay echo-free.
+    private func startMicrophoneRecorder(at url: URL) -> Bool {
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 44100.0,
+            AVNumberOfChannelsKey: 2,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
         do {
-            // Set up recording settings for microphone
-            let settings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: 44100.0,
-                AVNumberOfChannelsKey: 2,
-                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-            ]
-            
-            // Create audio recorder
-            guard let url = recordingURL else {
-                print("No recording URL available")
-                return false
-            }
+            try? FileManager.default.removeItem(at: url)
             audioRecorder = try AVAudioRecorder(url: url, settings: settings)
             audioRecorder?.delegate = self
             audioRecorder?.prepareToRecord()
-            
-            // Start recording
-            if audioRecorder?.record() == true {
-                isRecording = true
-                recordingStateChanged?(true)
-                return true
-            }
+            return audioRecorder?.record() == true
         } catch {
             print("Error starting microphone recording: \(error)")
+            return false
         }
-        
-        return false
     }
     
-    // Note: This requires additional work and a different approach to make it function
-    // We're currently exploring a better solution for system audio recording
     private func startSystemAudioRecording() -> Bool {
-        FileLogger.shared.log("\n=== SYSTEM AUDIO RECORDING DEBUG ===")
-        
-        // Check if ScreenCaptureKit is available (macOS 13.0+)
-        if #available(macOS 13.0, *) {
-            return startSystemAudioRecordingWithScreenCaptureKit()
-        } else {
-            // Fall back to legacy method for older macOS versions
-            FileLogger.shared.log("Using legacy system audio recording method (macOS < 13.0)")
-            print("Using legacy system audio recording method (macOS < 13.0)")
-            return startLegacySystemAudioRecording()
-        }
+        return startSystemAudioRecordingWithScreenCaptureKit()
     }
     
+    // Combined recording: microphone + system audio captured side by side, mixed offline on stop.
+    // Neither capture touches the output device, so there is no monitoring and therefore no echo.
     private func startCombinedRecording() -> Bool {
-        NSLog("🔴 COMBINED RECORDING ATTEMPT STARTED")
-        print("🔴 COMBINED RECORDING ATTEMPT STARTED")
-        
-        if #available(macOS 12.3, *) {
-            guard let combinedEngine = combinedAudioEngine else {
-                NSLog("🔴 COMBINED ENGINE NOT INITIALIZED")
-                print("🔴 COMBINED ENGINE NOT INITIALIZED")
-                return false
-            }
-            
-            NSLog("🔴 COMBINED ENGINE FOUND, CHECKING PERMISSIONS")
-            print("🔴 COMBINED ENGINE FOUND, CHECKING PERMISSIONS")
-            
-            // Check for permissions
-            let micPermission = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-            let screenPermission = CGPreflightScreenCaptureAccess()
-            
-            if !micPermission {
-                NSLog("🔴 MICROPHONE PERMISSION DENIED")
-                print("🔴 MICROPHONE PERMISSION DENIED")
-                return false
-            }
-            
-            if !screenPermission {
-                NSLog("🔴 SCREEN CAPTURE PERMISSION DENIED")
-                print("🔴 SCREEN CAPTURE PERMISSION DENIED")
-                return false
-            }
-            
-            NSLog("🔴 PERMISSIONS OK, STARTING RECORDING")
-            print("🔴 PERMISSIONS OK, STARTING RECORDING")
-            
-            if !combinedEngine.isRecording {
-                // DON'T set recordingURL here - let engine manage it
-                // recordingURL = combinedRecordingURL  // ← REMOVED
-                
-                // Start the engine recording
-                NSLog("🔴 CALLING ENGINE.STARTRECORDING()")
-                print("🔴 CALLING ENGINE.STARTRECORDING()")
-                combinedEngine.startRecording()
-                
-                NSLog("🔴 ENGINE STARTED, UPDATING STATE")
-                print("🔴 ENGINE STARTED, UPDATING STATE")
-                isRecording = true
-                recordingStateChanged?(true)
-                return true
-            } else {
-                print("Combined recording is already in progress")
-                return false
-            }
-        } else {
-            print("Combined recording requires macOS 12.3 or later")
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            print("Microphone permission not granted")
             return false
+        }
+        
+        // Starting the system audio capture also requests screen recording permission when needed
+        guard beginSystemAudioCapture() else { return false }
+        
+        guard startMicrophoneRecorder(at: combinedMicURL) else {
+            print("Could not start the microphone for combined recording")
+            endSystemAudioCapture { _, _ in }
+            return false
+        }
+        combinedMicStart = Date()
+        
+        isRecording = true
+        recordingStateChanged?(true)
+        return true
+    }
+    
+    // Stops both captures and mixes them into a single file
+    private func stopCombinedRecording() {
+        audioRecorder?.stop()
+        let micURL = combinedMicURL
+        let micStart = combinedMicStart ?? Date()
+        
+        endSystemAudioCapture { [weak self] sysURL, sysStart in
+            self?.mixCombined(micURL: micURL, micStart: micStart, sysURL: sysURL, sysStart: sysStart)
         }
     }
     
-    @available(macOS 13.0, *)
-    private func startSystemAudioRecordingWithScreenCaptureKit() -> Bool {
-        FileLogger.shared.log("Starting system audio recording with ScreenCaptureKit")
-        print("\n=== SYSTEM AUDIO RECORDING DEBUG ===")
-        print("Starting system audio recording with ScreenCaptureKit")
-        
-        // Check and request permission with better handling
-        let hasPermission = CGPreflightScreenCaptureAccess()
-        FileLogger.shared.log("Initial screen recording permission status: \(hasPermission)")
-        
-        if !hasPermission {
-            FileLogger.shared.log("Screen recording permission not granted - requesting access")
-            print("Screen recording permission not granted - requesting access")
-            
-            // Request permission (this displays system dialog)
-            CGRequestScreenCaptureAccess()
-            
-            // Show additional instructions
-            DispatchQueue.main.async {
-                let alert = NSAlert()
-                alert.messageText = "Screen Recording Permission Required"
-                alert.informativeText = "MacAudioRecorder needs screen recording permission to capture system audio. Please grant this permission in System Settings > Privacy & Security > Screen Recording."
-                alert.addButton(withTitle: "Open Settings")
-                alert.addButton(withTitle: "Cancel")
-                
-                if alert.runModal() == .alertFirstButtonReturn {
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
-                }
-                
-                self.recordingStateChanged?(false)
+    // Mixes the captures into the finished file. Either half may be missing - a recording that only
+    // has the microphone is still worth keeping.
+    private func mixCombined(micURL: URL, micStart: Date, sysURL: URL?, sysStart: Date?) {
+        var sources: [AudioMixdown.Source] = []
+        if fileSize(of: micURL) > 1000 {
+            sources.append(.init(url: micURL, offset: 0))
+            if let sysURL = sysURL {
+                // The system audio capture starts later, so it is delayed by exactly that difference
+                let offset = max(0, (sysStart ?? micStart).timeIntervalSince(micStart))
+                print(String(format: "Mixdown: system audio offset %.3fs", offset))
+                sources.append(.init(url: sysURL, offset: offset))
+            } else {
+                print("WARNING: no system audio was captured - mixing the microphone only")
             }
+        } else if let sysURL = sysURL {
+            print("WARNING: no microphone audio was captured - mixing the system audio only")
+            sources.append(.init(url: sysURL, offset: 0))
+        }
+        
+        guard !sources.isEmpty else {
+            print("WARNING: nothing was captured for the combined recording")
+            self.cleanUpCombinedInputs(micURL: micURL, sysURL: sysURL)
+            isMixingCombined = false
+            resetRecordingState()
+            return
+        }
+        statusChanged?("Mixing recording...")
+        
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("combined_recording_\(Int(Date().timeIntervalSince1970))_\(UUID().uuidString.prefix(8))")
+            .appendingPathExtension("m4a")
+        let flag = CancellationFlag()
+        mixCancellation = flag
+        
+        mixingTask = Task {
+            let mixed = await AudioRecorder.mixdown(sources,
+                                                    to: destination,
+                                                    shouldCancel: { flag.isCancelled })
+            self.mixCancellation = nil
+            self.mixingTask = nil
+            self.combinedMicStart = nil
+            self.cleanUpCombinedInputs(micURL: micURL, sysURL: sysURL)
+            
+            if let mixed = mixed {
+                self.recordingURL = mixed
+                print("Combined recording ready: \(mixed.path)")
+            } else {
+                print("WARNING: combined mixdown failed or was cancelled")
+                // Never leave a half-written mix behind
+                try? FileManager.default.removeItem(at: destination)
+                self.recordingURL = nil
+            }
+            self.isMixingCombined = false
+            self.resetRecordingState()
+        }
+    }
+    
+    private func cleanUpCombinedInputs(micURL: URL, sysURL: URL?) {
+        try? FileManager.default.removeItem(at: micURL)
+        if let sysURL = sysURL {
+            try? FileManager.default.removeItem(at: sysURL)
+        }
+    }
+    
+    private func fileSize(of url: URL) -> Int {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (attributes?[.size] as? NSNumber)?.intValue ?? 0
+    }
+    
+    // Abandons a running mix (used when the user stops again while it is mixing, and on quit)
+    private func cancelMixing() {
+        guard isMixingCombined else { return }
+        print("Cancelling the combined mix")
+        mixCancellation?.cancel()
+    }
+    
+    // Runs the offline mix away from the main actor
+    nonisolated private static func mixdown(_ sources: [AudioMixdown.Source],
+                                           to destination: URL,
+                                           shouldCancel: @escaping @Sendable () -> Bool) async -> URL? {
+        await Task.detached(priority: .userInitiated) { () -> URL? in
+            do {
+                try AudioMixdown.mix(sources, to: destination, shouldCancel: shouldCancel)
+                return destination
+            } catch {
+                print("Combined mix failed: \(error.localizedDescription)")
+                return nil
+            }
+        }.value
+    }
+    
+    private func startSystemAudioRecordingWithScreenCaptureKit() -> Bool {
+        guard beginSystemAudioCapture() else { return false }
+        isRecording = true
+        recordingURL = systemAudioRecordingURL  // Final working path, set once capture is promoted
+        return true
+    }
+    
+    // Starts a ScreenCaptureKit capture session, asking for screen recording permission when needed.
+    // Returns false when permission is missing (after prompting) or the session could not start.
+    private func beginSystemAudioCapture() -> Bool {
+        print("\n=== SYSTEM AUDIO RECORDING DEBUG ===")
+        
+        guard CGPreflightScreenCaptureAccess() else {
+            print("Screen recording permission not granted - requesting access")
+            CGRequestScreenCaptureAccess()
+            let alert = NSAlert()
+            alert.messageText = "Screen Recording Permission Required"
+            alert.informativeText = "Mix-Recording needs screen recording permission to capture system audio. Please grant this permission in System Settings > Privacy & Security > Screen Recording."
+            alert.addButton(withTitle: "Open Settings")
+            alert.addButton(withTitle: "Cancel")
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+            }
+            recordingStateChanged?(false)
             return false
         }
         
-        FileLogger.shared.log("Screen recording permission verified")
-        print("Screen recording permission verified")
-        
-        // Create temp path for audio output with unique timestamp and UUID for conflict avoidance
+        // Unique working file: an in-progress capture never clobbers a previous unsaved one
         let tempDir = FileManager.default.temporaryDirectory
         let uniqueID = UUID().uuidString.prefix(8)
         let timestamp = Int(Date().timeIntervalSince1970)
-        scOutputURL = tempDir.appendingPathComponent("system_audio_\(timestamp)_\(uniqueID).m4a")
+        let outputURL = tempDir.appendingPathComponent("system_audio_\(timestamp)_\(uniqueID).m4a")
         
-        guard let outputURL = scOutputURL else {
-            print("ERROR: Could not create output URL")
-            return false
+        let session = SystemAudioCapture(outputURL: outputURL)
+        let sessionID = session.id
+        session.onError = { [weak self] _, error in
+            Task { @MainActor in
+                guard let self = self, self.systemAudioSession?.id == sessionID else { return }
+                print("System audio stream stopped with error: \(error.localizedDescription)")
+                self.finishSystemAudioRecording(promote: true, generation: sessionID)
+            }
         }
         
-        // Set recording state
-        isRecording = true
-        recordingURL = systemAudioRecordingURL  // Final output after processing
+        systemAudioSession = session
         
-        // Create the ScreenCaptureManager
-        let manager = ScreenCaptureManager()
-        screenCaptureManager = manager
-        
-        // Set up ScreenCaptureKit recording (using async/await)
-        Task {
-            do {
-                // Get available content to capture - this is critical for ScreenCaptureKit
-                let availableContent = try await SCShareableContent.current
-                
-                // Log what displays are available to help with debugging
-                FileLogger.shared.log("Available displays for capture: \(availableContent.displays.count)")
-                for (index, display) in availableContent.displays.enumerated() {
-                    FileLogger.shared.log("   Display \(index): \(display.width)x\(display.height)")
-                }
-                
-                // Select the first available display for capture
-                guard let mainDisplay = availableContent.displays.first else {
-                    print("ERROR: No display available for capture")
-                    FileLogger.shared.log("ERROR: No display available for capture")
-                    self.stopRecording() // Clean up if we can't proceed
-                    return
-                }
-                
-                // Log selected display details
-                FileLogger.shared.log("Selected display for capture: \(mainDisplay.width)x\(mainDisplay.height)")
-                
-                // Get running applications that we might want to exclude
-                let runningApps = availableContent.applications
-                FileLogger.shared.log("Number of available applications: \(runningApps.count)")
-                
-                // Create a list of apps to exclude (optional - we're not excluding any here)
-                let excludedApps: [SCRunningApplication] = []
-                
-                // Configure content filter with the display we want to capture
-                // We're not excluding any apps, as that might affect audio capture
-                let filter = SCContentFilter(display: mainDisplay, excludingApplications: excludedApps, exceptingWindows: [])
-                
-                // Configure stream with minimal video, focused on audio
-                let configuration = SCStreamConfiguration()
-                configuration.capturesAudio = true         // Enable audio capture
-                configuration.excludesCurrentProcessAudio = true  // Don't record our own app's audio
-                
-                // Set audio-specific settings to match our file format
-                configuration.sampleRate = 44100
-                configuration.channelCount = 2
-                
-                // Minimal video settings (must be at least 2x2 to avoid API errors)
-                configuration.width = 2                    // Minimal video capture (2x2 pixels)
-                configuration.height = 2
-                configuration.minimumFrameInterval = CMTime(value: 1, timescale: 30) // 30 FPS (standard)
-                
-                // Set up audio file for writing
-                let audioSettings: [String: Any] = [
-                    AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                    AVSampleRateKey: 44100.0,
-                    AVNumberOfChannelsKey: 2,
-                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-                ]
-                
-                do {
-                    manager.audioFile = try AVAudioFile(forWriting: outputURL, settings: audioSettings)
-                    FileLogger.shared.log("Created audio file at: \(outputURL.path)")
-                } catch {
-                    FileLogger.shared.log("ERROR creating audio file: \(error.localizedDescription)")
-                    print("ERROR creating audio file: \(error.localizedDescription)")
-                    self.stopRecording()
-                    return
-                }
-                
-                // Create the stream with our manager as the delegate
-                let stream = SCStream(filter: filter, configuration: configuration, delegate: manager)
-                manager.stream = stream
-                
-                // Add stream output handler for audio
-                try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: manager.captureQueue)
-                
-                // Start capturing with better error handling
-                do {
-                    try await stream.startCapture()
-                    
-                    // Successfully started capture
-                    FileLogger.shared.log("Successfully started ScreenCaptureKit recording to: \(outputURL.path)")
-                    print("Successfully started ScreenCaptureKit recording")
-                } catch {
-                    // Log detailed error information
-                    let errorDetail = "ERROR starting ScreenCaptureKit recording: \(error.localizedDescription)"
-                    if let nsError = error as NSError? {
-                        FileLogger.shared.log("\(errorDetail) - Domain: \(nsError.domain), Code: \(nsError.code)")
-                        print("\(errorDetail) - Domain: \(nsError.domain), Code: \(nsError.code)")
-                        
-                        if nsError.domain == "CoreGraphicsErrorDomain" && nsError.code == 1003 {
-                            FileLogger.shared.log("This appears to be a stream initialization error. Likely causes: permissions, resource contention, or system restrictions.")
-                            print("This appears to be a stream initialization error. Likely causes: permissions, resource contention, or system restrictions.")
-                        }
-                    } else {
-                        FileLogger.shared.log(errorDetail)
-                        print(errorDetail)
-                    }
-                    
-                    // Clean up resources
-                    manager.stream = nil
-                    manager.audioFile = nil
-                    self.stopRecording()
-                    return
-                }
-                
-                // Notify UI that recording has started
-                DispatchQueue.main.async {
-                    self.recordingStateChanged?(true)
-                }
-            } catch {
-                FileLogger.shared.log("ERROR starting ScreenCaptureKit recording: \(error.localizedDescription)")
+        session.start { [weak self] result in
+            guard let self = self, self.systemAudioSession?.id == sessionID else { return }
+            switch result {
+            case .success:
+                print("Successfully started ScreenCaptureKit recording")
+                self.recordingStateChanged?(true)
+            case .failure(let error):
                 print("ERROR starting ScreenCaptureKit recording: \(error.localizedDescription)")
-                
-                // Clean up on error
-                DispatchQueue.main.async {
-                    self.stopRecording()
-                }
+                self.systemAudioSession = nil
+                session.cancel()
+                self.abortRecording()
             }
         }
         
         return true
     }
     
-    private func startLegacySystemAudioRecording() -> Bool {
-        FileLogger.shared.log("Starting system audio recording with CGDisplayStream + AVAudioEngine approach")
-        print("Starting system audio recording with CGDisplayStream + AVAudioEngine approach")
+    // Stops the capture session and hands back the working file (nil when nothing usable was
+    // captured) plus the time its first samples arrived, so several captures can be lined up.
+    private func endSystemAudioCapture(completion: @escaping @MainActor (URL?, Date?) -> Void) {
+        guard let session = systemAudioSession else {
+            completion(nil, nil)
+            return
+        }
+        systemAudioSession = nil
         
-        // First, ensure screen recording permission is granted (still required)
-        if !CGPreflightScreenCaptureAccess() {
-            FileLogger.shared.log("CRITICAL ERROR: Screen recording permission is required")
-            print("CRITICAL ERROR: Screen recording permission is required")
-            DispatchQueue.main.async {
-                self.recordingStateChanged?(false)
+        session.stop { size in
+            guard size > 1000 else {
+                print("WARNING: system audio recording is empty or was not captured - discarding")
+                try? FileManager.default.removeItem(at: session.outputURL)
+                completion(nil, session.firstBufferAt)
+                return
             }
-            return false
+            completion(session.outputURL, session.firstBufferAt)
         }
-        FileLogger.shared.log("Screen recording permission verified")
-        print("Screen recording permission verified")
-        
-        // Create temp paths for audio and video components
-        let tempDir = FileManager.default.temporaryDirectory
-        tempAudioURL = tempDir.appendingPathComponent("temp_audio_\(Date().timeIntervalSince1970).m4a")
-        tempVideoURL = tempDir.appendingPathComponent("temp_video_\(Date().timeIntervalSince1970).mp4")
-        
-        // Setup in two steps
-        if !setupAudioCapture() || !setupScreenCapture() {
-            cleanupRecording()
-            return false
-        }
-        
-        // Set recording state
-        isRecording = true
-        recordingURL = systemAudioRecordingURL  // Final output after processing
-        recordingStateChanged?(true)
-        print("System audio recording started successfully")
-        
-        return true
     }
     
-    private func setupAudioCapture() -> Bool {
-        // Initialize Audio Engine
-        audioEngine = AVAudioEngine()
-        mixerNode = AVAudioMixerNode()
-        
-        guard let audioEngine = audioEngine, let mixerNode = mixerNode, let tempAudioURL = tempAudioURL else {
-            print("ERROR: Failed to create audio components")
-            return false
-        }
-        
-        print("Setting up audio capture to: \(tempAudioURL.path)")
-        
-        // Try to delete existing audio file if it exists
-        if FileManager.default.fileExists(atPath: tempAudioURL.path) {
+    // Cleans up a failed start: stop the microphone and forget the captures
+    private func abortRecording() {
+        audioRecorder?.stop()
+        audioRecorder = nil
+        try? FileManager.default.removeItem(at: combinedMicURL)
+        resetRecordingState()
+    }
+
+    // System audio only: promote the working file to the stable name
+    private func stopSystemAudioRecording() {
+        endSystemAudioCapture { [weak self] url, _ in
+            guard let self = self else { return }
+            defer { self.resetRecordingState() }
+            guard let url = url else { return }
+            
+            let target = self.systemAudioRecordingURL
+            try? FileManager.default.removeItem(at: target)
             do {
-                try FileManager.default.removeItem(at: tempAudioURL)
+                try FileManager.default.moveItem(at: url, to: target)
+                self.recordingURL = target
+                print("System audio recording finished: \(target.path)")
             } catch {
-                print("Warning: Could not delete existing temp audio file: \(error)")
+                // Fall back to the unique file rather than losing the recording
+                print("Could not promote recording to \(target.path): \(error.localizedDescription)")
+                self.recordingURL = url
             }
-        }
-        
-        // Configure the audio engine
-        do {
-            // Get output node (system audio)
-            let outputNode = audioEngine.outputNode
-            
-            // Attach mixer node
-            audioEngine.attach(mixerNode)
-            
-            // Setup recording format
-            let recordingFormat = outputNode.outputFormat(forBus: 0)
-            print("Recording format: \(recordingFormat.description)")
-            
-            // Create audio file for writing
-            let recordingSettings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                AVSampleRateKey: recordingFormat.sampleRate,
-                AVNumberOfChannelsKey: recordingFormat.channelCount,
-                AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-            ]
-            
-            audioFile = try AVAudioFile(forWriting: tempAudioURL, 
-                                        settings: recordingSettings)
-            
-            // IMPORTANT: For system audio, tap the output node directly instead of trying to connect it
-            outputNode.installTap(onBus: 0, bufferSize: 4096, format: recordingFormat) { [weak self] buffer, time in
-                guard let self = self, let audioFile = self.audioFile else { return }
-                
-                do {
-                    try audioFile.write(from: buffer)
-                } catch {
-                    print("Error writing audio buffer: \(error.localizedDescription)")
-                }
-            }
-            
-            // Start audio engine
-            try audioEngine.start()
-            print("Audio engine started successfully")
-            return true
-        } catch {
-            print("Error setting up audio capture: \(error.localizedDescription)")
-            return false
         }
     }
     
-    private func setupScreenCapture() -> Bool {
-        guard let tempVideoURL = tempVideoURL else {
-            print("ERROR: No video URL available")
-            return false
-        }
-        
-        print("Setting up screen capture to: \(tempVideoURL.path)")
-        
-        // Delete existing video file if it exists
-        if FileManager.default.fileExists(atPath: tempVideoURL.path) {
-            do {
-                try FileManager.default.removeItem(at: tempVideoURL)
-            } catch {
-                print("Warning: Could not delete existing temp video file: \(error)")
-            }
-        }
-        
-        do {
-            // Setup asset writer for video
-            videoWriter = try AVAssetWriter(outputURL: tempVideoURL, fileType: .mp4)
-            
-            // Screen dimensions
-            let displayID = CGMainDisplayID()
-            let width = CGDisplayPixelsWide(displayID)
-            let height = CGDisplayPixelsHigh(displayID)
-            
-            // Use lower resolution and frame rate to minimize resource usage
-            // We're only capturing system audio, so the video quality is not important
-            let scaleFactor = 0.25 // 25% of screen size
-            let outputWidth = Int(Double(width) * scaleFactor)
-            let outputHeight = Int(Double(height) * scaleFactor)
-            
-            // Video settings (low quality, audio is what matters)
-            let videoSettings: [String: Any] = [
-                AVVideoCodecKey: AVVideoCodecType.h264,
-                AVVideoWidthKey: outputWidth,
-                AVVideoHeightKey: outputHeight,
-                AVVideoCompressionPropertiesKey: [
-                    AVVideoAverageBitRateKey: 1000000, // Low bitrate
-                    AVVideoMaxKeyFrameIntervalKey: 30, // Keyframe every 1 second at 30fps
-                    AVVideoProfileLevelKey: AVVideoProfileLevelH264BaselineAutoLevel
-                ]
-            ]
-            
-            // Create writer input
-            videoWriterInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
-            videoWriterInput?.expectsMediaDataInRealTime = true
-            
-            // Create pixel buffer adaptor
-            let sourcePixelBufferAttributes: [String: Any] = [
-                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: outputWidth,
-                kCVPixelBufferHeightKey as String: outputHeight
-            ]
-            
-            guard let videoWriterInput = videoWriterInput else {
-                print("ERROR: Could not create video writer input")
-                return false
-            }
-            
-            pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
-                assetWriterInput: videoWriterInput,
-                sourcePixelBufferAttributes: sourcePixelBufferAttributes
-            )
-            
-            // Add input to writer
-            if let videoWriter = videoWriter, videoWriter.canAdd(videoWriterInput) {
-                videoWriter.add(videoWriterInput)
-            } else {
-                print("ERROR: Cannot add video input to writer")
-                return false
-            }
-            
-            // Start the asset writer
-            if let videoWriter = videoWriter, videoWriter.startWriting() {
-                videoWriter.startSession(atSourceTime: CMTime.zero)
-                recordingStartTime = CMClockGetTime(CMClockGetHostTimeClock())
-                print("Started video asset writer")
-            } else {
-                print("ERROR: Cannot start video writer")
-                return false
-            }
-            
-            // Set up display stream
-            displayStream = CGDisplayStream(
-                dispatchQueueDisplay: displayID,
-                outputWidth: Int(outputWidth),
-                outputHeight: Int(outputHeight),
-                pixelFormat: Int32(kCVPixelFormatType_32BGRA),
-                properties: nil,
-                queue: screenCaptureQueue,
-                handler: { [weak self] status, displayTime, frameBuffer, sourceRect in
-                    guard let self = self,
-                          let frameBuffer = frameBuffer,
-                          status == .frameComplete,
-                          let recordingStartTime = self.recordingStartTime,
-                          let videoWriterInput = self.videoWriterInput,
-                          let pixelBufferAdaptor = self.pixelBufferAdaptor else {
-                        return
-                    }
-                    
-                    if videoWriterInput.isReadyForMoreMediaData {
-                        let currentTime = CMClockGetTime(CMClockGetHostTimeClock())
-                        let presentationTime = CMTimeSubtract(currentTime, recordingStartTime)
-                        
-                        // Write frame to video - force cast IOSurfaceRef to CVPixelBuffer
-                        let pixelBuffer = frameBuffer as! CVPixelBuffer
-                        pixelBufferAdaptor.append(pixelBuffer, withPresentationTime: presentationTime)
-                    }
-                }
-            )
-            
-            // Start the display stream
-            displayStream?.start()
-            print("Started display stream")
-            return true
-        } catch {
-            print("Error setting up screen capture: \(error.localizedDescription)")
-            return false
-        }
-    }
-    
-    // Note: This combined recording capability was previously implemented here,
-    // but has now been replaced by the implementation above that uses CombinedAudioEngine
-    
-    // This method is no longer used in our simplified implementation
-    // but kept as a placeholder for future enhancements
-    private func createSystemAudioNode() -> AVAudioNode? {
-        return nil
+    // Returns the recorder to a usable state without touching a session that may already be gone
+    private func resetRecordingState() {
+        isRecording = false
+        recordingStateChanged?(false)
     }
     
     func stopRecording() {
@@ -804,282 +712,65 @@ class AudioRecorder: NSObject {
                 stopSystemAudioRecording()
                 
             case .combined:
-                // Stop combined recording mode
-                if #available(macOS 12.3, *) {
-                    guard let engine = combinedAudioEngine else {
-                        print("Combined audio engine not available")
-                        isRecording = false
-                        recordingStateChanged?(false)
-                        return
-                    }
-                    
-                    // Stop the recording
-                    engine.stopRecording()
-                    
-                    // Sync the URL immediately after stopping
-                    NSLog("🔴 SYNCING COMPLETED URL FROM ENGINE")
-                    print("🔴 SYNCING COMPLETED URL FROM ENGINE")
-                    
-                    if let completedURL = engine.completedRecordingURL {
-                        recordingURL = completedURL
-                        NSLog("🔴 ✅ SYNCED recordingURL TO: \(completedURL.path)")
-                        print("🔴 ✅ SYNCED recordingURL TO: \(completedURL.path)")
-                    } else {
-                        NSLog("🔴 ❌ WARNING: NO COMPLETED URL FROM ENGINE")
-                        print("🔴 ❌ WARNING: NO COMPLETED URL FROM ENGINE")
-                    }
-                    
-                    isRecording = false
-                    recordingStateChanged?(false)
+                // Stop both captures and mix them (the mix runs in the background)
+                if isMixingCombined {
+                    // Pressing stop again abandons the mix instead of silently doing nothing
+                    cancelMixing()
+                    return
                 }
+                isMixingCombined = true
+                stopCombinedRecording()
             }
         }
     }
     
-    private func stopSystemAudioRecording() {
-        print("Stopping system audio recording")
-        FileLogger.shared.log("Stopping system audio recording")
-
-        // For the ScreenCaptureKit implementation (macOS 13.0+)
-        if #available(macOS 13.0, *) {
-            if let manager = screenCaptureManager as? ScreenCaptureManager {
-                stopSystemAudioRecordingWithScreenCaptureKit(manager: manager)
-                return // Exit early since we're handling the new implementation
-            }
+    // Called when the capture stream dies on its own or the session must be abandoned
+    private func finishSystemAudioRecording(promote: Bool, generation sessionID: UUID) {
+        guard let session = systemAudioSession, session.id == sessionID else {
+            print("Ignoring teardown for a session that is no longer current")
+            return
         }
+        systemAudioSession = nil
         
-        // LEGACY IMPLEMENTATION (for older macOS versions)
-        // Stop the display stream
-        displayStream?.stop()
-        print("Stopped display stream")
-        
-        // Stop and cleanup audio recording
-        if let engine = audioEngine, let mixerNode = mixerNode {
-            // Remove tap
-            mixerNode.removeTap(onBus: 0)
-            
-            // Stop the engine
-            engine.stop()
-            print("Stopped audio engine")
-        }
-        
-        // Finalize video recording
-        videoWriterInput?.markAsFinished()
-        
-        // Capture audio and video URLs before cleanup
-        let finalAudioURL = tempAudioURL
-        let finalVideoURL = tempVideoURL
-        
-        videoWriter?.finishWriting { [weak self] in
-            guard let self = self else { return }
-            
-            print("Finished writing video file")
-            
-            // Extract and process audio
-            if let audioURL = finalAudioURL, let videoURL = finalVideoURL,
-               FileManager.default.fileExists(atPath: audioURL.path) {
-                
-                do {
-                    let attributes = try FileManager.default.attributesOfItem(atPath: audioURL.path)
-                    if let size = attributes[.size] as? NSNumber {
-                        print("Temp audio file size: \(size.intValue) bytes")
-                        
-                        if size.intValue > 1000 {
-                            // We have good audio data, copy to final destination
-                            try FileManager.default.copyItem(at: audioURL, to: self.systemAudioRecordingURL)
-                            print("Audio file copied to final destination: \(self.systemAudioRecordingURL.path)")
-                            
-                            let finalAttributes = try FileManager.default.attributesOfItem(atPath: self.systemAudioRecordingURL.path)
-                            if let finalSize = finalAttributes[.size] as? NSNumber {
-                                print("Final recording size: \(finalSize.intValue) bytes")
-                            }
-                        } else {
-                            print("WARNING: Audio file is suspiciously small, may not contain audio")
-                        }
-                    }
-                } catch {
-                    print("Error processing audio file: \(error.localizedDescription)")
-                }
-                
-                // Cleanup temporary files
-                try? FileManager.default.removeItem(at: audioURL)
-                try? FileManager.default.removeItem(at: videoURL)
-            } else {
-                print("WARNING: Temp audio file not found")
+        // Combined recording: the system half died, so stop the microphone too and mix whatever both
+        // managed to capture instead of silently losing the microphone track.
+        if selectedSource == .combined {
+            print("System audio capture ended unexpectedly - finishing the combined recording")
+            audioRecorder?.stop()
+            let micURL = combinedMicURL
+            let micStart = combinedMicStart ?? Date()
+            isMixingCombined = true
+            session.stop { [weak self] size in
+                guard let self = self else { return }
+                self.mixCombined(micURL: micURL,
+                                 micStart: micStart,
+                                 sysURL: size > 1000 ? session.outputURL : nil,
+                                 sysStart: session.firstBufferAt)
             }
-            
-            // Always update recording state on main thread
-            DispatchQueue.main.async {
-                self.isRecording = false
-                self.recordingStateChanged?(false)
-            }
-        }
-    }
-    
-    @available(macOS 13.0, *)
-    private func stopSystemAudioRecordingWithScreenCaptureKit(manager: ScreenCaptureManager) {
-        // Capture local reference to the stream before clearing the manager
-        guard let stream = manager.stream else {
-            print("No active stream to stop")
             return
         }
         
-        // Clear references immediately to prevent redundant stop attempts
-        manager.stream = nil
-        
-        Task {
-            do {
-                // Stop the screen capture stream with direct reference
-                try await stream.stopCapture()
-                FileLogger.shared.log("Stopped ScreenCaptureKit capture")
-                print("Stopped ScreenCaptureKit capture")
-                
-                // Close audio file
-                manager.audioFile = nil
-                manager.stream = nil
-                screenCaptureManager = nil
-                
-                // Process the recorded file
-                if let outputURL = scOutputURL, FileManager.default.fileExists(atPath: outputURL.path) {
-                    do {
-                        let attributes = try FileManager.default.attributesOfItem(atPath: outputURL.path)
-                        if let size = attributes[.size] as? NSNumber {
-                            print("Recorded audio file size: \(size.intValue) bytes")
-                            
-                            if size.intValue > 1000 {  // Make sure we have actual data
-                                // Handle potential duplicate files by creating a unique destination name if needed
-                                let destinationURL = systemAudioRecordingURL
-                                
-                                // Remove destination file if it already exists
-                                if FileManager.default.fileExists(atPath: destinationURL.path) {
-                                    do {
-                                        try FileManager.default.removeItem(at: destinationURL)
-                                        print("Removed existing file at destination")
-                                    } catch {
-                                        print("Failed to remove existing file: \(error.localizedDescription)")
-                                        // Create alternative filename with timestamp
-                                        let timestamp = Int(Date().timeIntervalSince1970)
-                                        let alternateURL = destinationURL.deletingLastPathComponent()
-                                            .appendingPathComponent("system_audio_\(timestamp).m4a")
-                                        systemAudioRecordingURL = alternateURL
-                                    }
-                                }
-                                
-                                // Copy to final destination
-                                try FileManager.default.copyItem(at: outputURL, to: systemAudioRecordingURL)
-                                print("Successfully saved system audio recording to: \(systemAudioRecordingURL.path)")
-                                FileLogger.shared.log("Saved system audio to: \(systemAudioRecordingURL.path)")
-                                
-                                // Ensure UI updates
-                                DispatchQueue.main.async { [weak self] in
-                                    guard let self = self else { return }
-                                    self.isRecording = false
-                                    self.recordingStateChanged?(false)
-                                }
-                            } else {
-                                print("WARNING: Recorded file is too small, likely empty")
-                                FileLogger.shared.log("WARNING: Recorded file is too small, likely empty")
-                            }
-                        }
-                    } catch {
-                        print("Error processing recorded file: \(error.localizedDescription)")
-                        FileLogger.shared.log("Error processing recorded file: \(error.localizedDescription)")
-                    }
+        if promote {
+            session.stop { [weak self] size in
+                guard let self = self else { return }
+                defer { self.resetRecordingState() }
+                guard size > 1000 else {
+                    try? FileManager.default.removeItem(at: session.outputURL)
+                    return
                 }
-            } catch {
-                print("Error stopping capture: \(error.localizedDescription)")
-                FileLogger.shared.log("Error stopping capture: \(error.localizedDescription)")
-            }
-        }
-    }
-    
-    private func cleanupRecording() {
-        // ScreenCaptureKit cleanup (modern implementation)
-        if #available(macOS 13.0, *), let manager = screenCaptureManager as? ScreenCaptureManager {
-            // Capture the stream before nulling the references
-            if let stream = manager.stream {
-                // Clear the reference before attempting to stop
-                // to prevent duplicate stop attempts
-                manager.stream = nil
-                
-                Task {
-                    do {
-                        try await stream.stopCapture()
-                        print("Stopped ScreenCaptureKit during cleanup")
-                    } catch {
-                        print("Error stopping ScreenCaptureKit during cleanup: \(error.localizedDescription)")
-                    }
+                let target = self.systemAudioRecordingURL
+                try? FileManager.default.removeItem(at: target)
+                do {
+                    try FileManager.default.moveItem(at: session.outputURL, to: target)
+                    self.recordingURL = target
+                } catch {
+                    self.recordingURL = session.outputURL
                 }
             }
-            screenCaptureManager = nil
+        } else {
+            session.cancel()
+            resetRecordingState()
         }
-        
-        // Remove temp file from ScreenCaptureKit
-        if let outputURL = scOutputURL, FileManager.default.fileExists(atPath: outputURL.path) {
-            try? FileManager.default.removeItem(at: outputURL)
-            print("Removed temp ScreenCaptureKit audio file")
-        }
-        scOutputURL = nil
-        
-        // Legacy implementation cleanup
-        // Stop all recording components
-        displayStream?.stop()
-        
-        if let mixerNode = mixerNode {
-            mixerNode.removeTap(onBus: 0)
-        }
-        
-        audioEngine?.stop()
-        audioFile = nil
-        
-        videoWriterInput?.markAsFinished()
-        
-        // Remove temp files
-        if let audioURL = tempAudioURL, FileManager.default.fileExists(atPath: audioURL.path) {
-            try? FileManager.default.removeItem(at: audioURL)
-        }
-        
-        if let videoURL = tempVideoURL, FileManager.default.fileExists(atPath: videoURL.path) {
-            try? FileManager.default.removeItem(at: videoURL)
-        }
-        
-        // Reset components
-        displayStream = nil
-        audioEngine = nil
-        mixerNode = nil
-        videoWriter = nil
-        videoWriterInput = nil
-        pixelBufferAdaptor = nil
-        recordingStartTime = nil
-        tempVideoURL = nil
-        tempAudioURL = nil
-    }
-    
-    private func cleanupEngine() {
-        // This is now a wrapper for cleanupRecording to maintain API compatibility
-        cleanupRecording()
-    }
-    
-    private func cleanupCaptureSession() {
-        // Stop recording if in progress
-        if let output = movieOutput, output.isRecording {
-            output.stopRecording()
-        }
-        
-        // Stop the session
-        captureSession?.stopRunning()
-        
-        // Clear references for capture components
-        movieOutput = nil
-        audioOutput = nil
-        screenInput = nil
-        captureSession = nil
-        
-        // Clear references for audio writer components
-        audioWriter = nil
-        audioWriterInput = nil
-        
-        // Note: We don't clear tempFileURL here as it might still be needed for extraction
     }
     
     func startPlayback() -> Bool {
@@ -1088,35 +779,8 @@ class AudioRecorder: NSObject {
             return false
         }
         
-        FileLogger.shared.log("\n=== PLAYBACK DEBUG ===")
-        FileLogger.shared.log("Attempting to play: \(recordingURL?.path ?? "No recording URL")")
         print("\n=== PLAYBACK DEBUG ===")
         print("Attempting to play: \(recordingURL?.path ?? "No recording URL")")
-        
-        // Special handling for combined recordings
-        if selectedSource == .combined {
-            if #available(macOS 12.3, *), let engine = combinedAudioEngine {
-                NSLog("🟢 USING COMBINED ENGINE FOR PLAYBACK")
-                print("🟢 USING COMBINED ENGINE FOR PLAYBACK")
-                
-                // Ensure URL is synced before playback
-                if let engineURL = engine.completedRecordingURL {
-                    recordingURL = engineURL
-                    NSLog("🟢 ✅ SYNCED URL FOR PLAYBACK: \(engineURL.path)")
-                    print("🟢 ✅ SYNCED URL FOR PLAYBACK: \(engineURL.path)")
-                }
-                
-                let success = engine.playLastRecording()
-                if success {
-                    isPlaying = true
-                    playbackStateChanged?(true)
-                }
-                return success
-            } else {
-                print("Combined audio engine not available for playback")
-                // Fall back to regular playback
-            }
-        }
         
         // Standard playback for microphone and system audio recordings
         guard let url = recordingURL else {
@@ -1169,19 +833,10 @@ class AudioRecorder: NSObject {
             return
         }
         
-        // Handle combined recording playback
-        if selectedSource == .combined {
-            if #available(macOS 12.3, *), let engine = combinedAudioEngine {
-                // Stop the engine playback
-                // Note: The engine doesn't have a specific stopPlayback method,
-                // but stopping the engine will stop any ongoing playback
-                if engine.isRunning {
-                    engine.stop()
-                }
-            }
-        } else if let player = audioPlayer {
-            // Standard audio player stop
+        // All sources play through AVAudioPlayer now
+        if let player = audioPlayer {
             player.stop()
+            audioPlayer = nil
         }
         
         // Update state regardless of playback method
@@ -1189,7 +844,58 @@ class AudioRecorder: NSObject {
         playbackStateChanged?(false)
     }
     
-    func saveRecording(to url: URL, completion: @escaping (Bool) -> Void) {
+    // Extension of the current recording, exposed so the save panel offers a container that matches the file
+    var recordingFileExtension: String {
+        recordingURL?.pathExtension ?? "m4a"
+    }
+    
+    // Default file name for the save panel, per recording source
+    var suggestedSaveFileName: String {
+        switch selectedSource {
+        case .microphone: return "mic-recording.m4a"
+        case .systemAudio: return "sys-recording.m4a"
+        case .combined: return "mix-recording.m4a"
+        }
+    }
+    
+    // Writes `source` to `destination` without ever leaving the user without a file: the new
+    // recording is staged next to the destination and then swapped in.
+    private func stageAndReplace(_ source: URL, at destination: URL, move: Bool) throws {
+        let fileManager = FileManager.default
+        
+        guard fileManager.fileExists(atPath: destination.path) else {
+            if move {
+                try fileManager.moveItem(at: source, to: destination)
+            } else {
+                try fileManager.copyItem(at: source, to: destination)
+            }
+            return
+        }
+        
+        // Stage inside the destination directory so the swap below is a rename, not a copy
+        let staging = destination.deletingLastPathComponent()
+            .appendingPathComponent(".\(destination.lastPathComponent).incoming-\(UUID().uuidString.prefix(8))")
+        if move {
+            try fileManager.moveItem(at: source, to: staging)
+        } else {
+            try fileManager.copyItem(at: source, to: staging)
+        }
+        
+        do {
+            _ = try fileManager.replaceItemAt(destination, withItemAt: staging)
+        } catch {
+            // The recording must survive a failed swap: put a moved file back where it came from
+            // (a copy is simply discarded, the original is untouched).
+            if move {
+                try? fileManager.moveItem(at: staging, to: source)
+            } else {
+                try? fileManager.removeItem(at: staging)
+            }
+            throw error
+        }
+    }
+    
+    func saveRecording(to url: URL, completion: @escaping @MainActor (Bool) -> Void) {
         do {
             guard let sourceURL = recordingURL else {
                 print("No recording URL available to save")
@@ -1198,29 +904,23 @@ class AudioRecorder: NSObject {
             }
             
             if FileManager.default.fileExists(atPath: sourceURL.path) {
-                // Save diagnostic log alongside the recording
-                FileLogger.shared.log("Saving recording from \(sourceURL.path) to \(url.path)")
+                // Unsaved recordings live in the temporary directory and are moved out on save.
+                // A recording that was already saved once is copied instead, so re-saving does
+                // not destroy the copy that is already on disk.
+                let isWorkingFile = sourceURL.path.hasPrefix(FileManager.default.temporaryDirectory.path)
+                try stageAndReplace(sourceURL, at: url, move: isWorkingFile)
                 
-                // Copy the recording to the destination
-                try FileManager.default.copyItem(at: sourceURL, to: url)
-                
-                // Also save the log file for diagnostics
-                let logDestination = url.deletingLastPathComponent().appendingPathComponent("audio_recording_log.txt")
-                let logURL = URL(string: FileLogger.shared.getLogFilePath())
-                if let logURL = logURL, FileManager.default.fileExists(atPath: logURL.path) {
-                    try FileManager.default.copyItem(at: logURL, to: logDestination)
-                    FileLogger.shared.log("Log saved to: \(logDestination.path)")
-                    print("Diagnostic log saved to: \(logDestination.path)")
+                if isWorkingFile {
+                    // Playback and any later save now refer to the saved file
+                    recordingURL = url
                 }
                 
                 completion(true)
             } else {
-                FileLogger.shared.log("No recording found to save at \(sourceURL.path)")
                 print("No recording found to save at \(sourceURL.path)")
                 completion(false)
             }
         } catch {
-            FileLogger.shared.log("Error saving recording: \(error)")
             print("Error saving recording: \(error)")
             completion(false)
         }
@@ -1229,317 +929,47 @@ class AudioRecorder: NSObject {
 
 // MARK: - AVAudioRecorderDelegate
 extension AudioRecorder: AVAudioRecorderDelegate {
-    func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-        // Only mark as finished if not using capture session
-        if captureSession == nil {
+    nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
+        Task { @MainActor in
+            if !flag {
+                print("Recording failed")
+            }
+            // In combined mode the microphone is only one of two captures; the recording state is
+            // owned by the mixed result, so don't clear it here.
+            guard self.selectedSource != .combined else { return }
             self.isRecording = false
             self.recordingStateChanged?(false)
-        }
-        
-        if !flag {
-            print("Recording failed")
         }
     }
     
-    func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
-        if let error = error {
-            print("Recording error: \(error)")
-        }
-        
-        // Only mark as finished if not using capture session
-        if captureSession == nil {
+    nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
+        Task { @MainActor in
+            if let error = error {
+                print("Recording error: \(error)")
+            }
+            guard self.selectedSource != .combined else { return }
             self.isRecording = false
             self.recordingStateChanged?(false)
-        }
-    }
-}
-
-// MARK: - AVCaptureFileOutputRecordingDelegate
-extension AudioRecorder: AVCaptureFileOutputRecordingDelegate {
-    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL, from connections: [AVCaptureConnection], error: Error?) {
-        FileLogger.shared.log("\n=== CAPTURE DELEGATE CALLBACK ===")
-        FileLogger.shared.log("didFinishRecordingTo: \(outputFileURL.path)")
-        print("\n=== CAPTURE DELEGATE CALLBACK ===")
-        print("didFinishRecordingTo: \(outputFileURL.path)")
-        
-        // Handle any errors
-        if let error = error {
-            print("CRITICAL ERROR: Screen recording error: \(error.localizedDescription)")
-            self.isRecording = false
-            self.recordingStateChanged?(false)
-            return
-        }
-        print("No errors reported in recording callback")
-        
-        // Verify the file exists and has content
-        let fileExists = FileManager.default.fileExists(atPath: outputFileURL.path)
-        print("Output file exists: \(fileExists)")
-        
-        if fileExists {
-            do {
-                let attributes = try FileManager.default.attributesOfItem(atPath: outputFileURL.path)
-                if let size = attributes[.size] as? NSNumber {
-                    print("File size: \(size.intValue) bytes")
-                }
-            } catch {
-                print("Error checking file size: \(error)")
-            }
-        }
-        
-        // Process the recorded file - extract audio for system audio recordings
-        print("Proceeding to extract audio from screen recording")
-        extractAudioFromScreenRecording(outputFileURL)
-    }
-}
-
-// MARK: - AVCaptureAudioDataOutputSampleBufferDelegate
-extension AudioRecorder: AVCaptureAudioDataOutputSampleBufferDelegate {
-    // We're now using AVCaptureMovieFileOutput instead of processing audio samples directly
-    
-    func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        if output is AVCaptureAudioDataOutput {
-            print("WARNING: Dropped audio sample buffer")
-            FileLogger.shared.log("WARNING: Dropped audio sample buffer")
-        }
-    }
-}
-    
-// MARK: - Audio Extraction
-extension AudioRecorder {
-    private func extractAudioFromScreenRecording(_ videoURL: URL) {
-        FileLogger.shared.log("\n=== AUDIO EXTRACTION PROCESS ===")
-        FileLogger.shared.log("Creating asset from: \(videoURL.path)")
-        print("\n=== AUDIO EXTRACTION PROCESS ===")
-        print("Creating asset from: \(videoURL.path)")
-        
-        // Create an asset from the screen recording
-        let asset = AVAsset(url: videoURL)
-        
-        // Print asset duration
-        let duration = CMTimeGetSeconds(asset.duration)
-        print("Asset duration: \(duration) seconds")
-        
-        // List all tracks in the asset
-        print("Asset tracks:")
-        for track in asset.tracks {
-            print("- Track ID: \(track.trackID), type: \(track.mediaType.rawValue), format: \(track.formatDescriptions)")
-        }
-        
-        // Check if it has an audio track
-        guard let audioTrack = asset.tracks(withMediaType: .audio).first else {
-            print("CRITICAL ERROR: No audio track found in the screen recording!")
-            print("This likely means no system audio was captured.")
-            isRecording = false
-            recordingStateChanged?(false)
-            return
-        }
-        print("Found audio track: \(audioTrack.trackID)")
-        print("Audio format descriptions: \(audioTrack.formatDescriptions)")
-        print("Audio track duration: \(CMTimeGetSeconds(audioTrack.timeRange.duration)) seconds")
-        
-        do {
-            // Create an export session to extract just the audio
-            let composition = AVMutableComposition()
-            
-            // Create an audio track in the composition
-            let compositionAudioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
-            
-            // Add the audio from the screen recording to the composition
-            try compositionAudioTrack?.insertTimeRange(
-                CMTimeRange(start: .zero, duration: asset.duration),
-                of: audioTrack,
-                at: .zero
-            )
-            
-            // Configure export
-            guard let exportSession = AVAssetExportSession(asset: composition, presetName: AVAssetExportPresetAppleM4A) else {
-                print("Could not create export session")
-                self.isRecording = false
-                self.recordingStateChanged?(false)
-                return
-            }
-            
-            exportSession.outputURL = recordingURL
-            exportSession.outputFileType = .m4a
-            
-            // Export the audio
-            print("Starting async export to: \(recordingURL?.path ?? "unknown")")
-            exportSession.exportAsynchronously { [weak self] in
-                DispatchQueue.main.async { [weak self] in
-                    guard let self = self else { return }
-                    FileLogger.shared.log("\n=== EXPORT COMPLETION ===")
-                    print("\n=== EXPORT COMPLETION ===")
-                    // Check export status
-                    switch exportSession.status {
-                    case .completed:
-                        print("✅ Audio extraction completed successfully")
-                        // Verify the file exists after export
-                        if let url = self.recordingURL, FileManager.default.fileExists(atPath: url.path) {
-                            print("✅ Recording saved to: \(url.path)")
-                            
-                            // Get file size
-                            do {
-                                let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-                                if let size = attributes[.size] as? NSNumber {
-                                    print("Final file size: \(size.intValue) bytes")
-                                    if size.intValue < 1000 {
-                                        print("WARNING: File is suspiciously small, may not contain audio")
-                                    }
-                                }
-                            } catch {
-                                print("Error checking final file size: \(error)")
-                            }
-                        } else {
-                            print("❌ ERROR: Export completed but file not found at destination")
-                        }
-                    case .failed:
-                        print("❌ Export failed: \(exportSession.error?.localizedDescription ?? "unknown error")")
-                    case .cancelled:
-                        print("❌ Export cancelled")
-                    default:
-                        print("⚠️ Export ended with status: \(exportSession.status.rawValue)")
-                    }
-                    
-                    // Clean up the temp video file
-                    do {
-                        if FileManager.default.fileExists(atPath: videoURL.path) {
-                            try FileManager.default.removeItem(at: videoURL)
-                        }
-                    } catch {
-                        print("Error removing temp file: \(error)")
-                    }
-                    
-                    // Update state
-                    self.isRecording = false
-                    self.recordingStateChanged?(false)
-                    
-                    // Clean up capture session
-                    self.cleanupCaptureSession()
-                }
-            }
-        } catch {
-            print("Error extracting audio: \(error)")
-            self.isRecording = false
-            self.recordingStateChanged?(false)
-        }
-    }
-}
-
-// MARK: - SCStreamOutput
-@available(macOS 13.0, *)
-extension AudioRecorder: SCStreamOutput {
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        // We only care about audio samples
-        guard type == .audio, 
-              let manager = screenCaptureManager as? ScreenCaptureManager,
-              let audioFile = manager.audioFile else { return }
-        
-        // Process audio sample buffer - use direct writing method for maximum compatibility
-        do {
-            // We need to convert CMSampleBuffer to AVAudioPCMBuffer first
-            if let formatDescription = sampleBuffer.formatDescription {
-                // Get format from the CMSampleBuffer
-                let format = AVAudioFormat(cmAudioFormatDescription: formatDescription)
-                
-                // Create buffer with the proper capacity
-                let frameCapacity = AVAudioFrameCount(sampleBuffer.numSamples)
-                guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else {
-                    print("Failed to create PCM buffer")
-                    return
-                }
-                
-                // Set the frame length to match sample count
-                pcmBuffer.frameLength = frameCapacity
-                
-                // Use Apple's recommended approach with CMSampleBuffer
-                // Instead of trying to manually copy audio data, we'll take a different approach
-                
-                // Create a new asset writer to directly write the CMSampleBuffer
-                let tempAudioURL = FileManager.default.temporaryDirectory.appendingPathComponent("temp_audio_\(UUID().uuidString).m4a")
-                
-                // Setup an asset writer for direct CMSampleBuffer writing
-                let assetWriter = try AVAssetWriter(outputURL: tempAudioURL, fileType: .m4a)
-                
-                // Configure the audio input
-                let audioSettings: [String: Any] = [
-                    AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-                    AVSampleRateKey: 44100.0,
-                    AVNumberOfChannelsKey: 2,
-                    AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
-                ]
-                
-                let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
-                writerInput.expectsMediaDataInRealTime = true
-                
-                // Add the input to the writer
-                if assetWriter.canAdd(writerInput) {
-                    assetWriter.add(writerInput)
-                }
-                
-                // Start the asset writer
-                assetWriter.startWriting()
-                assetWriter.startSession(atSourceTime: CMTime.zero)
-                
-                // Write the sample buffer
-                if writerInput.isReadyForMoreMediaData {
-                    writerInput.append(sampleBuffer)
-                }
-                
-                // Finish writing
-                writerInput.markAsFinished()
-                assetWriter.finishWriting {
-                    // Now that we have the audio in the temp file, use AVAudioFile to process it
-                    do {
-                        // Open the temp file and read its format
-                        let tempAudioFile = try AVAudioFile(forReading: tempAudioURL)
-                        let format = tempAudioFile.processingFormat
-                        
-                        // Create a buffer large enough for the entire file
-                        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(tempAudioFile.length)) else {
-                            print("Could not create buffer")
-                            return
-                        }
-                        
-                        // Read the file into the buffer
-                        try tempAudioFile.read(into: buffer)
-                        
-                        // Write the buffer to our recording file
-                        try audioFile.write(from: buffer)
-                    
-                        
-                        // Clean up temp file
-                        try? FileManager.default.removeItem(at: tempAudioURL)
-                        
-                        // Log success - use explicit self to avoid capture semantics warning
-                        self.audioFrameCounter += 1
-                        if self.audioFrameCounter <= 5 {
-                            print("Successfully wrote audio frame \(self.audioFrameCounter)")
-                            FileLogger.shared.log("Successfully wrote audio frame \(self.audioFrameCounter)")
-                        }
-                    } catch {
-                        print("Error processing temp audio file: \(error.localizedDescription)")
-                    }
-                }
-            }
-        } catch {
-            print("Error writing audio sample: \(error.localizedDescription)")
-            FileLogger.shared.log("Error writing audio sample: \(error.localizedDescription)")
         }
     }
 }
 
 // MARK: - AVAudioPlayerDelegate
 extension AudioRecorder: AVAudioPlayerDelegate {
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        self.isPlaying = false
-        self.playbackStateChanged?(false)
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            self.isPlaying = false
+            self.playbackStateChanged?(false)
+        }
     }
     
-    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-        if let error = error {
-            print("Playback error: \(error)")
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor in
+            if let error = error {
+                print("Playback error: \(error)")
+            }
+            self.isPlaying = false
+            self.playbackStateChanged?(false)
         }
-        isPlaying = false
-        playbackStateChanged?(false)
     }
 }

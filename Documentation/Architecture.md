@@ -1,8 +1,8 @@
-# MacAudioRecorder Architecture
+# Mix-Recording Architecture
 
 ## System Overview
 
-MacAudioRecorder is a macOS application built with Swift and SwiftUI that provides audio recording capabilities from two primary sources:
+Mix-Recording is a macOS application built with Swift and SwiftUI that provides audio recording capabilities from two primary sources:
 
 1. **Microphone recording** - using standard AVFoundation APIs
 2. **System audio recording** - using ScreenCaptureKit (macOS 13.0+) with legacy fallback options
@@ -42,7 +42,7 @@ private class ScreenCaptureManager: NSObject, SCStreamDelegate {
     // SCStreamDelegate implementation
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         print("Stream stopped with error: \(error.localizedDescription)")
-        FileLogger.shared.log("Stream stopped with error: \(error.localizedDescription)")
+        print("Stream stopped with error: \(error.localizedDescription)")
     }
 }
 ```
@@ -128,23 +128,19 @@ This indirect approach solves the complex challenge of properly handling audio f
    - Closes audio files
    - Clears references to prevent memory leaks
 4. **File processing**:
-   - Verifies recorded file exists and has content
-   - Manages file conflicts with existing recordings
-   - Copies temporary file to final destination
-5. **State updates**: Notifies UI of recording state change
+   - Verifies the recorded file exists and contains audio
+   - Moves the working file from the temporary directory to the stable working name
+5. **State updates**: Always notifies the UI when the recording ends, even when it captured nothing
 
-### Legacy Implementation
+### Legacy Implementation (removed)
 
-For macOS versions before 13.0, a fallback approach is used:
-
-1. **CGDisplayStream**: Captures minimal screen content to satisfy system requirements
-2. **Audio capture**: Attempts to record system audio through available means
+An earlier fallback for macOS versions before 13.0 (CGDisplayStream + AVCaptureSession) existed in this repository. It was unreachable because the project deploys to macOS 13.5, and it has been deleted.
 
 ### Error Handling and Diagnostics
 
 The implementation includes robust error handling:
 
-1. **FileLogger**: Custom logging class that records operations to a text file
+1. **Standard output logging**: Diagnostic messages are printed while developing; the app does not write a log file
 2. **Detailed error captures**: All errors include specific error domains and codes
 3. **Recovery mechanisms**: Handles permission changes, file conflicts, and stream errors
 
@@ -162,9 +158,9 @@ Audio playback is handled by AVAudioPlayer with these key steps:
 The app implements careful file management to prevent conflicts and ensure data integrity:
 
 1. **Unique filenames**: Uses timestamps and UUIDs to prevent collisions
-2. **Temporary storage**: Uses FileManager.default.temporaryDirectory for in-process files
-3. **Permanent storage**: Moves completed recordings to document directory
-4. **File conflict resolution**: Handles existing files by creating alternatives
+2. **Temporary storage**: All recordings (AAC `.m4a`) stay in FileManager.default.temporaryDirectory until the user saves them
+3. **Save**: Moves the working file to the location the user picks (defaults to ~/Music)
+4. **Cleanup**: Unsaved working files are deleted on quit and on the next launch
 
 ## Security and Permissions
 
@@ -204,4 +200,4 @@ Several significant technical challenges were solved:
 
 ## Conclusion
 
-The MacAudioRecorder architecture demonstrates a sophisticated approach to audio capture on macOS, particularly for system audio recording which requires navigating complex API constraints and security requirements. The implementation follows best practices for Swift development, error handling, and resource management while providing a smooth user experience across different macOS versions.
+The Mix-Recording architecture demonstrates a sophisticated approach to audio capture on macOS, particularly for system audio recording which requires navigating complex API constraints and security requirements. The implementation follows best practices for Swift development, error handling, and resource management while providing a smooth user experience across different macOS versions.

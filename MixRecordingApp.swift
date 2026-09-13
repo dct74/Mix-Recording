@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct MacAudioRecorderApp: App {
+struct MixRecordingApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

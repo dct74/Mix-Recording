@@ -1,183 +1,153 @@
-# Mac Combined Audio Recorder
+# Mix-Recording
 
-A powerful macOS application that enables simultaneous recording of microphone input and system audio, built with SwiftUI and AVFoundation.
+A macOS recorder for the microphone, the system audio, or both at once.
+
+Fork of [ianpilon/Mac-Combined-Recording-working-Aug-2-20205](https://github.com/ianpilon/Mac-Combined-Recording-working-Aug-2-20205),
+renamed and substantially rewritten (see [Architecture](#architecture)).
 
 ## Features
 
-### 🎤 Multiple Recording Sources
-- **Microphone Only**: Record audio from your microphone input
-- **System Audio Only**: Capture audio playing through your Mac's speakers
-- **Combined Recording**: Simultaneously record both microphone and system audio
+- **Three recording sources**: microphone only, system audio only, or combined (microphone + system audio)
+- **Combined recording without echo**: the two captures are recorded side by side and mixed *offline* when
+  you stop. Nothing is played back to the speakers while recording, so the microphone can never
+  re-record its own delayed signal (the acoustic feedback loop an earlier version had)
+- **Playback and Save** straight from the app; recordings are saved as AAC `.m4a`
+- **No leftovers**: unsaved recordings live in the temporary directory and are removed when the app
+  quits and on the next launch; no log files are written
 
-### 🎵 Playback & Management
-- Play back recorded audio directly in the app
-- Save recordings in high-quality M4A format
-- Real-time status updates during recording and playback
+## Requirements
 
-### 🔒 Privacy & Permissions
-- Automatic permission handling for microphone access
-- Screen recording permission management for system audio capture
-- Clear user guidance for required permissions
+- macOS 13.5 or later
+- Xcode 16 or later to build (the project uses file system synchronized groups)
 
-## System Requirements
+## Install
 
-- **macOS 11.0+** (minimum)
-- **macOS 12.3+** (recommended for combined recording features)
-- **macOS 13.0+** (for enhanced system audio capture using ScreenCaptureKit)
+### Homebrew
 
-## Technical Architecture
+```bash
+brew tap dct74/mix-recording https://github.com/dct74/Mix-Recording
+brew install --cask mix-recording
+```
 
-### Core Components
+The cask installs the app from a GitHub release archive, so a release has to exist first — see
+[Publishing a release](#publishing-a-release).
 
-#### AudioRecorder.swift
-The main audio recording engine that handles:
-- AVFoundation-based microphone recording
-- ScreenCaptureKit integration for system audio (macOS 13.0+)
-- Legacy system audio recording for older macOS versions
-- Audio file management and playback
+### Build from source
 
-#### CombinedAudioEngine.swift
-Specialized engine for simultaneous microphone and system audio recording:
-- AVAudioEngine-based audio mixing
-- Real-time audio stream processing
-- Feedback prevention during playback
-- Advanced audio routing and node management
+```bash
+git clone git@github.com:dct74/Mix-Recording.git
+cd Mix-Recording
 
-#### ContentView.swift
-SwiftUI-based user interface providing:
-- Intuitive recording source selection
-- Real-time status display
-- Recording, playback, and save controls
-- Cross-version UI compatibility
+# Only needed when xcode-select still points at the Command Line Tools
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 
-### Audio Technologies Used
+xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording \
+  -configuration Release -derivedDataPath build build
 
-- **AVFoundation**: Core audio recording and playback
-- **AVAudioEngine**: Real-time audio processing and mixing
-- **ScreenCaptureKit**: Modern system audio capture (macOS 13.0+)
-- **CoreAudio**: Low-level audio system integration
-- **AVAssetWriter**: High-quality audio file encoding
+open build/Build/Products/Release/Mix-Recording.app
+```
 
-## Installation & Setup
+### Publishing a release
 
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/ianpilon/Mac-Combined-Recording-working-Aug-2-20205.git
-   ```
+The Homebrew cask points at `Mix-Recording-<version>.zip` on the GitHub releases page:
 
-2. **Open in Xcode**:
-   - Open `MacAudioRecorder.xcodeproj` in Xcode
-   - Ensure you have Xcode 13.0+ installed
+```bash
+xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording \
+  -configuration Release -derivedDataPath build build
 
-3. **Configure permissions**:
-   - The app will automatically request microphone permissions
-   - For system audio recording, you'll need to grant screen recording permission in:
-     `System Settings > Privacy & Security > Screen Recording`
+(cd build/Build/Products/Release && zip -qry /tmp/Mix-Recording-1.0.zip Mix-Recording.app)
+shasum -a 256 /tmp/Mix-Recording-1.0.zip     # put this hash into Casks/mix-recording.rb
+```
 
-4. **Build and run**:
-   - Select your target device
-   - Press `Cmd+R` to build and run
+Create a release tagged `v1.0` and upload `/tmp/Mix-Recording-1.0.zip`, then update `version` and
+`sha256` in `Casks/mix-recording.rb` and commit.
 
 ## Usage
 
-### Basic Recording
-1. Launch the application
-2. Select your desired recording source:
-   - **Microphone Only**: For voice recordings
-   - **System Audio Only**: For capturing computer audio
-   - **Combined Recording**: For recording both simultaneously
-3. Click the **Record** button to start recording
-4. Click **Stop Recording** when finished
-5. Use **Play** to preview your recording
-6. Click **Save** to export the recording as an M4A file
+1. Pick a recording source: **Microphone Only**, **System Audio Only** or **Combined Recording**
+2. Press **Record**, then **Stop Recording**
+   - After a combined recording the app mixes the two captures; this takes a moment (the UI shows
+     *"Mixing recording..."*), and a very long recording takes a few seconds. Pressing stop again
+     cancels the mix.
+3. **Play** to preview, **Save** to write the file (the panel defaults to `~/Music`)
 
-### Advanced Features
+First run asks for permissions:
 
-#### Combined Recording
-The combined recording feature allows you to:
-- Record your voice commentary while capturing system audio
-- Create tutorials with both narration and computer audio
-- Record video calls with both participants' audio
+- **Microphone** — required for the microphone and combined sources
+- **Screen Recording** — required for the system audio and combined sources (system audio is captured
+  with ScreenCaptureKit)
 
-#### System Audio Capture
-- Requires screen recording permission (automatically prompted)
-- Uses ScreenCaptureKit for high-quality capture on macOS 13.0+
-- Falls back to legacy methods on older systems
+## Where recordings live
 
-## File Structure
+| Stage | Location |
+| --- | --- |
+| Being recorded (not saved yet) | `$TMPDIR` — `mic_recording.m4a`, `system_audio_<timestamp>_<id>.m4a`, `combined_mic.m4a`, `combined_recording_<timestamp>_<id>.m4a` |
+| After **Save** | wherever you choose; the panel defaults to `~/Music` with `mic-recording.m4a`, `sys-recording.m4a` or `mix-recording.m4a` |
 
-```
-MacAudioRecorder/
-├── AudioRecorder.swift          # Core recording engine
-├── CombinedAudioEngine.swift    # Combined recording engine
-├── ContentView.swift            # Main UI
-├── AudioRecorderApp.swift       # App entry point
-├── AppDelegate.swift           # App lifecycle management
-├── Info.plist                  # App configuration
-└── MacAudioRecorder.xcodeproj  # Xcode project file
-```
+- Save *moves* the working file out of the temporary directory (re-saving an already saved recording
+  copies it instead, so nothing on disk is destroyed)
+- Unsaved recordings are deleted when the app quits and any leftovers are removed on the next launch;
+  files that do not belong to the app are never touched
+
+## Architecture
+
+| File | Responsibility |
+| --- | --- |
+| `AudioRecorder.swift` | Source selection, permissions, session lifecycle, cleanup, save and playback |
+| `AudioMixdown.swift` | Offline mixdown of a combined recording (AVAudioEngine manual rendering) |
+| `AudioFileWriter.swift` | Writes capture buffers to disk from a dedicated queue with a preallocated buffer pool |
+| `ContentView.swift` | SwiftUI view and view model |
+| `MixRecordingApp.swift` | App entry point |
+
+- **Combined recording** = microphone (`AVAudioRecorder`) + system audio (ScreenCaptureKit), mixed
+  offline on stop. The two captures start at different moments, so the mixdown delays the system audio
+  by the measured difference. Because neither capture touches the output device there is no monitoring
+  and therefore no echo.
+- **Thread isolation** is enforced by the compiler: `AudioRecorder` and `AudioRecorderViewModel` are
+  `@MainActor`, and everything that runs on a capture or render thread lives in `Sendable` helpers
+  (`SystemAudioCapture`, `SystemAudioPlayer`, `AudioFileWriter`) that own their state.
+- The previous real-time mixing engine has been deleted. It fed the microphone and a copy of the system
+  audio into the engine's main mixer, which is wired to the output node — so both were monitored through
+  the speakers and the microphone re-recorded that delayed signal (a ~12 ms feedback loop in the file).
 
 ## Troubleshooting
 
-### Common Issues
+**Screen recording permission is asked for again after every rebuild**
+- Development builds are signed ad-hoc, so macOS treats each build as a new app. Grant the permission
+  again, or use a stable signing identity.
+- If *Mix-Recording* does not appear under `System Settings → Privacy & Security → Screen Recording`,
+  press Record once with **System Audio Only** or **Combined Recording** selected: the app calls
+  `CGRequestScreenCaptureAccess()` before showing its own instructions, which registers it there.
 
-**"Screen recording permission required"**
-- Go to `System Settings > Privacy & Security > Screen Recording`
-- Enable permission for the Mac Audio Recorder app
-- Restart the application
+**"Could not start recording"**
+- Check microphone access under `System Settings → Privacy & Security → Microphone`
+- For system audio, check `Screen Recording`
 
-**"No audio input devices found"**
-- Check that your microphone is connected and recognized by macOS
-- Verify microphone permissions in `System Settings > Privacy & Security > Microphone`
-
-**Recording quality issues**
-- Ensure sufficient disk space for recordings
-- Check audio input levels in System Preferences
-- For system audio, verify the source application is producing audio
-
-### Debug Logging
-The app includes comprehensive logging for troubleshooting:
-- Log files are saved to `~/Documents/audio_recorder_log.txt`
-- Enable debug output in Console.app by filtering for "MacAudioRecorder"
+**The combined recording is missing after a mix failure**
+- The mixdown runs offline and logs its result to standard output; a failed or cancelled mix leaves no
+  half-written file behind and is reported in the status line
 
 ## Development
 
-### Building from Source
 ```bash
-# Clone the repository
-git clone https://github.com/ianpilon/Mac-Combined-Recording-working-Aug-2-20205.git
+# Debug build
+export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording \
+  -configuration Debug -derivedDataPath build build
 
-# Open in Xcode
-open MacAudioRecorder.xcodeproj
-
-# Build and run
-# Press Cmd+R in Xcode
+# Build the test bundles (Mix-RecordingTests / Mix-RecordingUITests)
+xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording \
+  -configuration Debug -derivedDataPath build build-for-testing
 ```
 
-### Key Dependencies
-- SwiftUI (UI framework)
-- AVFoundation (Audio recording/playback)
-- ScreenCaptureKit (System audio capture)
-- CoreAudio (Low-level audio access)
+The unit test target imports the app module as `@testable import Mix_Recording` (the product name is
+`Mix-Recording`, so the module name replaces the hyphen).
 
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+`Documentation/` contains design notes; the files describing the old implementation
+(`CombinedRecordingRootCauseAnalysis.md`, `CombinedRecordingIssuesResolved.md`,
+`CriticalFixesImplementationPlan.md`) are kept as historical records.
 
 ## License
 
-This project is available under the MIT License. See the LICENSE file for more details.
-
-## Acknowledgments
-
-- Built with Apple's AVFoundation and ScreenCaptureKit frameworks
-- Designed for macOS with backwards compatibility in mind
-- Optimized for professional audio recording workflows
-
----
-
-**Note**: This application requires macOS-specific permissions and frameworks. It is designed specifically for macOS and will not run on other platforms.
+The upstream README mentions an MIT license but the repository does not contain a `LICENSE` file, so
+none is included here either — add one before publishing if you need explicit terms.
