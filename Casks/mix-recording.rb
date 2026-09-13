@@ -10,11 +10,11 @@ cask "mix-recording" do
 
   app "Mix-Recording.app"
 
-  uninstall quit: "io.github.ianpilon.Mix-Recording"
+  uninstall quit: "io.github.dct74.Mix-Recording"
 
   zap trash: [
-    "~/Library/Containers/io.github.ianpilon.Mix-Recording",
-    "~/Library/Preferences/io.github.ianpilon.Mix-Recording.plist",
-    "~/Library/Saved Application State/io.github.ianpilon.Mix-Recording.savedState",
+    "~/Library/Containers/io.github.dct74.Mix-Recording",
+    "~/Library/Preferences/io.github.dct74.Mix-Recording.plist",
+    "~/Library/Saved Application State/io.github.dct74.Mix-Recording.savedState",
   ]
 end

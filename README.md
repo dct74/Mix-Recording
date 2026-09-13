@@ -119,6 +119,12 @@ First run asks for permissions:
   press Record once with **System Audio Only** or **Combined Recording** selected: the app calls
   `CGRequestScreenCaptureAccess()` before showing its own instructions, which registers it there.
 
+**macOS refuses to open the app installed with Homebrew**
+
+- The build is signed ad-hoc and not notarized, so Gatekeeper may block the first launch
+  ("Apple could not verify ..."). Right-click the app and choose *Open* once, or clear the quarantine
+  flag: `xattr -dr com.apple.quarantine /Applications/Mix-Recording.app`.
+
 **"Could not start recording"**
 - Check microphone access under `System Settings → Privacy & Security → Microphone`
 - For system audio, check `Screen Recording`
@@ -149,5 +155,5 @@ The unit test target imports the app module as `@testable import Mix_Recording` 
 
 ## License
 
-The upstream README mentions an MIT license but the repository does not contain a `LICENSE` file, so
-none is included here either — add one before publishing if you need explicit terms.
+MIT — see [LICENSE](LICENSE). The original project is by Ian Pilon; this fork keeps that copyright
+notice alongside the fork's own.
