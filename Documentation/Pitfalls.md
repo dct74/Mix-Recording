@@ -45,19 +45,25 @@
 - **原因**：① Homebrew 6 拒绝加载未信任 tap 的 cask；② cask 缺少 `depends_on macos:`，跨平台校验先报 `Invalid cask (Linux on ...)`。
 - **正确做法**（顺序不能反）：
   1. cask 里写 `depends_on macos: :ventura`（**不要**写已弃用的 `">= :ventura"` 字符串比较形式）；
-  2. `brew trust dct74/mix-recording`；
-  3. `brew tap dct74/mix-recording https://github.com/dct74/Mix-Recording`；
+  2. `brew trust dct74/tap`；
+  3. `brew tap dct74/tap`；
   4. `brew install --cask mix-recording`。
+- 本项目的 cask 放在通用 tap 仓库 `dct74/homebrew-tap`（cask 全名 `dct74/tap/mix-recording`）。
 
-### 2.2 改了 cask 但 brew 仍用旧版
+### 2.2 tap 名 = 仓库名去掉 `homebrew-` 前缀
+- **症状**：把 cask 直接放进 app 仓库（`dct74/Mix-Recording`）后，安装名变成 `dct74/mix-recording/mix-recording`，看起来像把名字写重了。
+- **原因**：仓库名不是 `homebrew-<名字>` 形式时，Homebrew 只能用仓库名本身当 tap 名（`dct74/mix-recording`），于是 `tap/cask` 两段恰好同名；而且这种仓库**不能用简写 tap**，必须 `brew tap dct74/mix-recording https://github.com/dct74/Mix-Recording` 传完整 URL。
+- **正确做法**：想要 `user/tap/<名字>` 这种规范形式，cask 必须放在名为 `homebrew-tap`（或 `homebrew-<名字>`）的仓库里，然后 `brew tap dct74/tap` 即可（无需 URL）。同一个 cask 不要同时存在于两个 tap，否则同名产生歧义。
+
+### 2.3 改了 cask 但 brew 仍用旧版
 - **原因**：本地 tap 的 git 克隆滞后（Homebrew 会复用缓存）。
 - **正确做法**：
   ```bash
-  T="$(brew --repository)/Library/Taps/dct74/homebrew-mix-recording"
+  T="$(brew --repository)/Library/Taps/dct74/homebrew-tap"
   git -C "$T" fetch origin && git -C "$T" reset --hard origin/main
   ```
 
-### 2.3 发布 Release：`gh release create` 受 scope 预检阻挡
+### 2.4 发布 Release：`gh release create` 受 scope 预检阻挡
 - **症状**：`gh release create` 报 `"workflow" scope may be required`。
 - **正确做法**：用 REST API 建 release，再用 curl 上传资产（`repo` scope 足够）：
   ```bash

@@ -25,13 +25,13 @@ renamed and substantially rewritten (see [Architecture](#architecture)).
 ### Homebrew
 
 ```bash
-brew tap dct74/mix-recording https://github.com/dct74/Mix-Recording
-brew trust dct74/mix-recording            # Homebrew 6 asks for this on third-party taps
+brew tap dct74/tap
+brew trust dct74/tap                      # Homebrew 6 asks for this on third-party taps
 brew install --cask mix-recording
 ```
 
-- The tap form above installs the cask straight from this repository (Homebrew clones it into its tap
-  directory); the app itself comes from the release archive, so a release has to exist first — see
+- The cask lives in the [dct74/homebrew-tap](https://github.com/dct74/homebrew-tap) tap; the app
+  itself comes from the release archive, so a release has to exist first — see
   [Publishing a release](#publishing-a-release).
 - Homebrew 6 refuses to load casks from an untrusted tap, hence the `brew trust` step. Tapping before
   trusting prints a confusing "invalid syntax in tap!" error; just run the three lines in order.
@@ -82,12 +82,12 @@ codesign --verify --deep --strict $PRODUCT        # must print "valid on disk"
 
 # ditto keeps the bundle's symlinks and metadata; a plain zip can break the signature
 ditto -c -k --sequesterRsrc --keepParent $PRODUCT /tmp/Mix-Recording-<version>.zip
-shasum -a 256 /tmp/Mix-Recording-<version>.zip    # put this hash into Casks/mix-recording.rb
+shasum -a 256 /tmp/Mix-Recording-<version>.zip    # hash for the tap's Casks/mix-recording.rb
 ```
 
 Create a release tagged `v1.0` and upload `/tmp/Mix-Recording-1.0.zip`, then update `version` and
-`sha256` in `Casks/mix-recording.rb`, commit and push. Anyone who already tapped the repository picks
-the new checksum up with `brew update`.
+`sha256` in `Casks/mix-recording.rb` in the [tap repository](https://github.com/dct74/homebrew-tap),
+and commit and push there. Anyone who already tapped it picks the new checksum up with `brew update`.
 
 `gh release create` may refuse with *"workflow" scope may be required*; creating the release through
 the API (`gh api --method POST /repos/<owner>/<repo>/releases …`, then uploading the asset to
