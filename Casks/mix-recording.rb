@@ -1,7 +1,6 @@
 cask "mix-recording" do
   version "1.0"
-  # Replace with the output of: shasum -a 256 Mix-Recording-<version>.zip
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "a8a9e91875d5b7568b5716d7f3c04fd3d1a7596a85b5119d17d97ed172c584f8"
 
   url "https://github.com/dct74/Mix-Recording/releases/download/v#{version}/Mix-Recording-#{version}.zip"
   name "Mix-Recording"
