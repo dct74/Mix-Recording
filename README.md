@@ -26,11 +26,17 @@ renamed and substantially rewritten (see [Architecture](#architecture)).
 
 ```bash
 brew tap dct74/mix-recording https://github.com/dct74/Mix-Recording
+brew trust dct74/mix-recording            # Homebrew 6 asks for this on third-party taps
 brew install --cask mix-recording
 ```
 
-The cask installs the app from a GitHub release archive, so a release has to exist first — see
-[Publishing a release](#publishing-a-release).
+- The tap form above installs the cask straight from this repository (Homebrew clones it into its tap
+  directory); the app itself comes from the release archive, so a release has to exist first — see
+  [Publishing a release](#publishing-a-release).
+- Homebrew 6 refuses to load casks from an untrusted tap, hence the `brew trust` step. Tapping before
+  trusting prints a confusing "invalid syntax in tap!" error; just run the three lines in order.
+- Uninstall with `brew uninstall --cask mix-recording` (add `brew zap mix-recording` to remove the
+  sandbox container and preferences as well).
 
 ### Build from source
 
@@ -60,7 +66,12 @@ shasum -a 256 /tmp/Mix-Recording-1.0.zip     # put this hash into Casks/mix-reco
 ```
 
 Create a release tagged `v1.0` and upload `/tmp/Mix-Recording-1.0.zip`, then update `version` and
-`sha256` in `Casks/mix-recording.rb` and commit.
+`sha256` in `Casks/mix-recording.rb`, commit and push. Anyone who already tapped the repository picks
+the new checksum up with `brew update`.
+
+`gh release create` may refuse with *"workflow" scope may be required*; creating the release through
+the API (`gh api --method POST /repos/<owner>/<repo>/releases …`, then uploading the asset to
+`uploads.github.com`) works with the ordinary `repo` scope.
 
 ## Usage
 
