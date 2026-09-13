@@ -202,6 +202,9 @@ xcodebuild -project Mix-Recording.xcodeproj -scheme Mix-Recording -configuration
 The unit test target imports the app module as `@testable import Mix_Recording` (the product name is
 `Mix-Recording`, so the module name replaces the hyphen).
 
+`Documentation/Pitfalls.md` collects the build, signing, Homebrew and AVAudioEngine pitfalls hit while
+working on this project, together with the commands that fix them (Chinese).
+
 `Documentation/` contains design notes; the files describing the old implementation
 (`CombinedRecordingRootCauseAnalysis.md`, `CombinedRecordingIssuesResolved.md`,
 `CriticalFixesImplementationPlan.md`) are kept as historical records.
