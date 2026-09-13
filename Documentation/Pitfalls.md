@@ -38,6 +38,20 @@
   ```
 - 判断 bundle 本身是否健康：直接前台跑 `Contents/MacOS/Mix-Recording`，能起且窗口正常就说明包没问题。
 
+### 1.5 Homebrew 默认给 cask 打 quarantine → 首次启动被 Gatekeeper 拦
+- **症状**：`brew install/upgrade` 之后的**新副本**首次启动，进程起来了但没有窗口，只弹一个 `CoreServicesUIAgent` 窗口（"Apple 无法验证此 App"）；手动清掉属性后立刻正常。`xattr -l` 能看到 `com.apple.quarantine: 0381;…`。
+- **原因**：Homebrew 对 cask 下载**默认设置 quarantine 标记**（所以才存在 `--no-quarantine` / `HOMEBREW_CASK_OPTS`）。带 quarantine 的文件首次启动会触发 Gatekeeper 评估；本 App 是 ad-hoc 签名（未公证，`spctl` 必然 `rejected`），于是被拦。
+- **正确做法**：在 cask 里加 `postflight` 清掉该属性（用户装完即可双击打开）：
+  ```ruby
+  postflight do
+    system_command "/usr/bin/xattr",
+                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Mix-Recording.app"],
+                   sudo: false
+  end
+  ```
+  替代方案：文档里让用户首次“右键 → 打开”，或 `brew install --cask --no-quarantine mix-recording`；根治是 Developer ID + 公证。
+- **相关**：构建产物若放在 iCloud 同步目录（如 `~/Documents`）会带上 `com.apple.provenance`（甚至 `com.apple.FinderInfo`），打包前 `xattr -cr` 一下更干净；但只有 `quarantine` 会触发 Gatekeeper，`provenance` 不会。
+
 ## 2. Homebrew
 
 ### 2.1 Homebrew 6 的 tap 有信任门槛，且 cask 必须声明 macOS 依赖
