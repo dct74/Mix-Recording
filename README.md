@@ -168,6 +168,17 @@ First run asks for permissions:
 - To remove the prompt entirely the app has to be signed with a Developer ID certificate and
   notarized, which requires a paid Apple Developer account.
 
+**The app launches but no window appears**
+
+- `brew reinstall --cask mix-recording` replaces the bundle, and LaunchServices can keep a stale
+  registration for the old one. Re-register it, or open the app by path instead of by name:
+
+  ```bash
+  /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister \
+    -f -R -trusted /Applications/Mix-Recording.app
+  open /Applications/Mix-Recording.app
+  ```
+
 **"Could not start recording"**
 - Check microphone access under `System Settings → Privacy & Security → Microphone`
 - For system audio, check `Screen Recording`
