@@ -7,6 +7,9 @@ cask "mix-recording" do
   desc "Record the microphone, the system audio, or both at once"
   homepage "https://github.com/dct74/Mix-Recording"
 
+  # macOS-only app; without this the cask fails Homebrew's cross-platform validation
+  depends_on macos: ">= :ventura"
+
   app "Mix-Recording.app"
 
   uninstall quit: "io.github.dct74.Mix-Recording"
